@@ -1,0 +1,27 @@
+tools:
+  - name: get_status
+    description: Check OpenSCAD bridge availability. Read-only.
+    input_schema: {type: object, properties: {}, additionalProperties: false}
+    output_schema: {type: object}
+    read_only: true
+    destructive: false
+    idempotent: true
+    execution: sync
+    affinity: any
+    source_file: scripts/get_status.py
+  - name: inspect_file
+    description: Read-only SCAD file inspection.
+    input_schema:
+      type: object
+      properties:
+        path: {type: string}
+      required: [path]
+      additionalProperties: false
+    output_schema: {type: object}
+    read_only: true
+    destructive: false
+    idempotent: true
+    execution: sync
+    affinity: any
+    source_file: scripts/inspect_file.py
+
