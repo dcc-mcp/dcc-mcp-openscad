@@ -1,27 +1,132 @@
 tools:
   - name: get_status
-    description: Check OpenSCAD bridge availability. Read-only.
+    description: Verify the OpenSCAD CLI, version, workspace roots, and runtime limits.
+    source_file: scripts/get_status.py
     input_schema: {type: object, properties: {}, additionalProperties: false}
     output_schema: {type: object}
-    read_only: true
-    destructive: false
-    idempotent: true
     execution: sync
     affinity: any
-    source_file: scripts/get_status.py
-  - name: inspect_file
-    description: Read-only SCAD file inspection.
+    enforce_thread_affinity: true
+    timeout_hint_secs: 30
+    annotations: {read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false, deferred_hint: false}
+
+  - name: get_capabilities
+    description: Inspect CLI flags, output extensions, customizer support, and PNG color schemes.
+    source_file: scripts/get_capabilities.py
+    input_schema: {type: object, properties: {}, additionalProperties: false}
+    output_schema: {type: object}
+    execution: sync
+    affinity: any
+    enforce_thread_affinity: true
+    timeout_hint_secs: 30
+    annotations: {read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false, deferred_hint: false}
+
+  - name: inspect_source
+    description: Statically inspect SCAD modules, functions, variables, and include/use references without executing the model.
+    source_file: scripts/inspect_source.py
     input_schema:
       type: object
-      properties:
-        path: {type: string}
       required: [path]
+      properties:
+        path: {type: string, minLength: 1, description: Absolute or workspace-relative .scad path.}
       additionalProperties: false
     output_schema: {type: object}
-    read_only: true
-    destructive: false
-    idempotent: true
     execution: sync
     affinity: any
-    source_file: scripts/inspect_file.py
+    enforce_thread_affinity: true
+    timeout_hint_secs: 10
+    annotations: {read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false, deferred_hint: false}
+    call_examples:
+      - arguments: {path: "models/enclosure.scad"}
+        note: Inspect a model before compiling it.
 
+  - name: validate_model
+    description: Compile a SCAD model to a temporary CSG artifact and return structured warnings and errors.
+    source_file: scripts/validate_model.py
+    input_schema:
+      type: object
+      required: [path]
+      properties:
+        path: {type: string, minLength: 1}
+        parameters: {type: object, maxProperties: 64, description: JSON scalars or arrays encoded as safe OpenSCAD -D assignments.}
+        strict: {type: boolean, default: true}
+        timeout_secs: {type: number, minimum: 1, maximum: 1800, default: 120}
+      additionalProperties: false
+    output_schema: {type: object}
+    execution: async
+    job_strategy: monolithic
+    affinity: any
+    enforce_thread_affinity: true
+    timeout_hint_secs: 1800
+    annotations: {read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false, deferred_hint: true}
+    call_examples:
+      - arguments: {path: "models/enclosure.scad", parameters: {width: 120, vents: true}, strict: true}
+        note: Validate a parameterized model with warnings treated as failures.
+    next-tools:
+      on-failure: [get_status, inspect_source]
+
+  - name: export_model
+    description: Export a SCAD model to STL, 3MF, AMF, OFF, CSG, DXF, SVG, PDF, or diagnostic text formats.
+    source_file: scripts/export_model.py
+    input_schema:
+      type: object
+      required: [source_path, output_path]
+      properties:
+        source_path: {type: string, minLength: 1}
+        output_path: {type: string, minLength: 1}
+        parameters: {type: object, maxProperties: 64}
+        stl_encoding: {type: string, enum: [ascii, binary], default: binary}
+        strict: {type: boolean, default: true}
+        overwrite: {type: boolean, default: false}
+        timeout_secs: {type: number, minimum: 1, maximum: 1800, default: 600}
+      additionalProperties: false
+    output_schema: {type: object}
+    execution: async
+    job_strategy: monolithic
+    affinity: any
+    enforce_thread_affinity: true
+    timeout_hint_secs: 1800
+    annotations: {read_only_hint: false, destructive_hint: true, idempotent_hint: false, open_world_hint: false, deferred_hint: true}
+    call_examples:
+      - arguments: {source_path: "models/enclosure.scad", output_path: "build/enclosure.stl", stl_encoding: binary}
+        note: Export a compact binary STL without replacing an existing file.
+      - arguments: {source_path: "models/plate.scad", output_path: "build/plate.svg", parameters: {thickness: 3}}
+        note: Export a parameterized 2D SVG artifact.
+    next-tools:
+      on-failure: [validate_model, get_status]
+
+  - name: render_preview
+    description: Render a deterministic PNG preview or full geometry render from a SCAD model.
+    source_file: scripts/render_preview.py
+    input_schema:
+      type: object
+      required: [source_path, output_path]
+      properties:
+        source_path: {type: string, minLength: 1}
+        output_path: {type: string, minLength: 1}
+        width: {type: integer, minimum: 64, maximum: 8192, default: 1200}
+        height: {type: integer, minimum: 64, maximum: 8192, default: 800}
+        full_render: {type: boolean, default: false}
+        projection: {type: string, enum: [orthographic, perspective], default: perspective}
+        color_scheme: {type: string, default: Cornfield}
+        camera:
+          type: array
+          minItems: 6
+          maxItems: 7
+          items: {type: number}
+        parameters: {type: object, maxProperties: 64}
+        overwrite: {type: boolean, default: false}
+        timeout_secs: {type: number, minimum: 1, maximum: 1800, default: 600}
+      additionalProperties: false
+    output_schema: {type: object}
+    execution: async
+    job_strategy: monolithic
+    affinity: any
+    enforce_thread_affinity: true
+    timeout_hint_secs: 1800
+    annotations: {read_only_hint: false, destructive_hint: true, idempotent_hint: false, open_world_hint: false, deferred_hint: true}
+    call_examples:
+      - arguments: {source_path: "models/enclosure.scad", output_path: "build/enclosure.png", width: 1200, height: 800, full_render: true}
+        note: Render a production-quality PNG with automatic framing.
+    next-tools:
+      on-failure: [validate_model, get_capabilities]

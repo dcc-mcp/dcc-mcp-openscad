@@ -2,7 +2,7 @@ from dcc_mcp_core.skill import run_main
 
 from dcc_mcp_openscad.skill_tools import bridge_main
 
-main = bridge_main("status", "OpenSCAD adapter status inspected.")
+main = bridge_main("inspect_file", "OpenSCAD source inspected.")
 
 
 if __name__ == "__main__":
