@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.1.0...v0.1.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* restore complete MIT license text ([#3](https://github.com/dcc-mcp/dcc-mcp-openscad/issues/3)) ([736f8b2](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/736f8b25c32da246b8c640550510cfc2b76d646f))
+
 ## 0.1.0 (2026-08-10)
 
 
