@@ -7,6 +7,10 @@
 Production OpenSCAD adapter for deterministic model inspection, validation,
 geometry export, and PNG rendering through DCC-MCP.
 
+![Parameterized OpenSCAD bracket moving through topology validation to a game-ready mesh](docs/images/dcc-mcp-openscad-showcase.webp)
+
+_Illustrative workflow based on the live OpenSCAD → FreeCAD → Blender/Godot acceptance run; generated source is retained in `docs/images/dcc-mcp-openscad-showcase-source.png`._
+
 ## Capabilities
 
 - Detect the standalone OpenSCAD CLI and report version-specific capabilities.
