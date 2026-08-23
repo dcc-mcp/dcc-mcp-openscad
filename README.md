@@ -38,9 +38,19 @@ launcher automatically.
 
 ## Install
 
+See [`install.md`](install.md) for wheel-only setup, platform discovery, JSON
+doctor/verify, upgrade, uninstall, and troubleshooting.
+
 ```bash
 python -m pip install dcc-mcp-openscad
+dcc-mcp-openscad doctor --json
 dcc-mcp-openscad
+```
+
+For an explicit standalone readiness check:
+
+```powershell
+dcc-mcp-openscad verify --executable "C:\Program Files\OpenSCAD\openscad.com" --json
 ```
 
 For development:
