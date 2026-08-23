@@ -342,7 +342,7 @@ class OpenscadCli:
             "diagnostics": _diagnostics(stdout, stderr),
         }
 
-    def status(self) -> dict[str, Any]:
+    def status(self, timeout_secs: float = 20) -> dict[str, Any]:
         if not self.executable:
             return {
                 "ready": False,
@@ -351,10 +351,11 @@ class OpenscadCli:
                 "reason": "openscad_not_found",
                 "allowed_roots": [str(root) for root in self.allowed_roots],
             }
-        version_run = self._run(("--version",), 10)
+        probe_timeout = self._timeout(timeout_secs)
+        version_run = self._run(("--version",), min(10, probe_timeout))
         version_output = (version_run["stdout"] + "\n" + version_run["stderr"]).strip()
         if not version_output:
-            info_run = self._run(("--info",), 20)
+            info_run = self._run(("--info",), probe_timeout)
             version_output = (info_run["stdout"] + "\n" + info_run["stderr"]).strip()
             ready = info_run["returncode"] == 0
         else:
@@ -370,11 +371,15 @@ class OpenscadCli:
             "max_timeout_secs": self.max_timeout_secs,
         }
 
-    def capabilities(self) -> dict[str, Any]:
-        status = self.status()
+    def capabilities(
+        self,
+        status: Optional[Mapping[str, Any]] = None,
+        timeout_secs: float = 20,
+    ) -> dict[str, Any]:
+        status = dict(status) if status is not None else self.status(timeout_secs)
         if not status["ready"]:
             return {"ready": False, "status": status, "flags": {}, "output_extensions": []}
-        help_run = self._run(("--help",), 10)
+        help_run = self._run(("--help",), min(10, self._timeout(timeout_secs)))
         help_text = help_run["stdout"] + "\n" + help_run["stderr"]
         flags = {
             name: name in help_text
@@ -391,7 +396,8 @@ class OpenscadCli:
             )
         }
         return {
-            "ready": True,
+            "ready": help_run["returncode"] == 0,
+            "reason": None if help_run["returncode"] == 0 else "openscad_help_failed",
             "status": status,
             "flags": flags,
             "output_extensions": sorted(_DEFAULT_OUTPUT_EXTENSIONS),

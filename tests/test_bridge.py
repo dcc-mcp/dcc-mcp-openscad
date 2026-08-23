@@ -181,21 +181,16 @@ def _real_openscad() -> str:
 @pytest.mark.openscad
 @pytest.mark.skipif(not _real_openscad(), reason="OPENSCAD_TEST_EXECUTABLE is not set")
 def test_real_openscad_validate_export_and_render(tmp_path: Path):
-    source = tmp_path / "production-smoke.scad"
-    source.write_text(
-        "size = 12;\n"
-        "module rounded_block(value) { minkowski() { cube(value); sphere(r=1, $fn=16); } }\n"
-        "rounded_block(size);\n",
-        encoding="utf-8",
-    )
-    cli = OpenscadCli(_real_openscad(), allowed_roots=[tmp_path])
+    root = Path(__file__).parents[1]
+    source = root / "examples" / "production_smoke.scad"
+    cli = OpenscadCli(_real_openscad(), allowed_roots=[root, tmp_path])
 
     assert cli.status()["ready"] is True
-    validation = cli.validate_model(str(source), parameters={"size": 10})
+    validation = cli.validate_model(str(source), parameters={"width": 90, "vent_count": 4})
     stl = cli.export_model(
         str(source),
         str(tmp_path / "production-smoke.stl"),
-        parameters={"size": 10},
+        parameters={"width": 90, "vent_count": 4},
     )
     png = cli.render_preview(
         str(source),
@@ -203,7 +198,7 @@ def test_real_openscad_validate_export_and_render(tmp_path: Path):
         width=640,
         height=480,
         full_render=True,
-        parameters={"size": 10},
+        parameters={"width": 90, "vent_count": 4},
     )
 
     assert validation["valid"] is True
