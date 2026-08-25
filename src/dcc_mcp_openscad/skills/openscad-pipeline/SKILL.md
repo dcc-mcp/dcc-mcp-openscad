@@ -5,7 +5,7 @@ description: >-
   standalone CLI. Use for deterministic SCAD build pipelines; do not use it
   for arbitrary command-line flags or source-code generation.
 license: MIT
-compatibility: "Python 3.7+; OpenSCAD 2021.01+; dcc-mcp-core 0.19+"
+compatibility: "Python 3.7+; OpenSCAD 2021.01+; dcc-mcp-core 0.20.14+"
 allowed-tools: "python"
 metadata:
   dcc-mcp:

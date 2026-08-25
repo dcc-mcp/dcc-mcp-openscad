@@ -15,6 +15,7 @@ def test_install_guide_documents_standalone_wheel_and_verify_contract() -> None:
         "## Supported versions",
         "## Agent quick path",
         "## Manual path",
+        "## Lifecycle",
         "## Verify",
         "## Upgrade",
         "## Uninstall",
@@ -25,8 +26,11 @@ def test_install_guide_documents_standalone_wheel_and_verify_contract() -> None:
     assert "python -m pip install dcc-mcp-openscad" in guide
     assert "pip install -e" not in guide
     assert "dcc-mcp-openscad doctor --json" in guide
+    assert "dcc-mcp-openscad install --yes --json" in guide
     assert "dcc-mcp-openscad verify" in guide
-    assert all("`%s`" % code in guide for code in (0, 10, 40))
+    assert "dcc-mcp-openscad uninstall --yes --json" in guide
+    assert all("`%s`" % code in guide for code in (0, 10, 20, 30, 40, 50))
+    assert "dcc-mcp-core>=0.20.14,<1.0.0" in guide
     assert "openscad.com" in guide
     assert "openscad.exe" in guide
     assert "does not download" in guide

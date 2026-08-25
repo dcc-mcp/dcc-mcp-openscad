@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from dcc_mcp_core.skills_helper import check_dcc_cancelled
+from ._process import ProcessCleanupError, run_bounded_command
 
 _PARAMETER_NAME = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 _MODULE = re.compile(r"\bmodule\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(")
@@ -282,7 +282,7 @@ class OpenscadCli:
 
     def _timeout(self, value: float) -> float:
         timeout = float(value)
-        if timeout <= 0 or timeout > self.max_timeout_secs:
+        if not math.isfinite(timeout) or timeout <= 0 or timeout > self.max_timeout_secs:
             raise OpenScadError(
                 "timeout_secs must be greater than 0 and no more than %s"
                 % int(self.max_timeout_secs)
@@ -295,54 +295,42 @@ class OpenscadCli:
         timeout = self._timeout(timeout_secs)
         command = [self.executable] + [str(item) for item in args]
         started = time.monotonic()
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stdout_file:
-            with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
-                process = subprocess.Popen(
-                    command,
-                    cwd=str(cwd) if cwd else None,
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    text=True,
-                    creationflags=creationflags,
-                )
-                try:
-                    deadline = started + timeout
-                    while process.poll() is None:
-                        check_dcc_cancelled()
-                        if time.monotonic() >= deadline:
-                            raise OpenScadTimeoutError(
-                                "OpenSCAD exceeded the %.1f second timeout" % timeout
-                            )
-                        time.sleep(0.05)
-                except BaseException:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=3)
-                    raise
-                stdout_file.seek(0)
-                stderr_file.seek(0)
-                stdout = stdout_file.read(65_537)
-                stderr = stderr_file.read(65_537)
-        stdout_truncated = len(stdout) > 65_536
-        stderr_truncated = len(stderr) > 65_536
-        stdout = stdout[:65_536]
-        stderr = stderr[:65_536]
+        try:
+            result = run_bounded_command(command, timeout=timeout, cwd=cwd)
+        except ProcessCleanupError:
+            raise OpenScadError(
+                "OpenSCAD process supervision failed: probe_cleanup_failed"
+            ) from None
+        reason = result.get("reason")
+        if reason == "probe_timeout":
+            raise OpenScadTimeoutError("OpenSCAD exceeded the configured timeout")
+        if reason in {
+            "probe_cleanup_failed",
+            "probe_launch_failed",
+            "probe_status_invalid",
+            "probe_supervisor_failed",
+        }:
+            raise OpenScadError("OpenSCAD process supervision failed: %s" % reason)
+        stdout = str(result.get("stdout") or "")
+        stderr = str(result.get("stderr") or "")
+        truncated = bool(result.get("truncated"))
         return {
-            "returncode": int(process.returncode or 0),
+            "returncode": int(result.get("returncode") or 0),
             "duration_secs": round(time.monotonic() - started, 3),
             "stdout": stdout,
             "stderr": stderr,
-            "stdout_truncated": stdout_truncated,
-            "stderr_truncated": stderr_truncated,
+            "stdout_truncated": truncated,
+            "stderr_truncated": truncated,
             "diagnostics": _diagnostics(stdout, stderr),
         }
 
     def status(self, timeout_secs: float = 20) -> dict[str, Any]:
+        timeout = self._timeout(timeout_secs)
+        return self._status_until(time.monotonic() + timeout, timeout)
+
+    def _status_until(
+        self, deadline: float, initial_budget: Optional[float] = None
+    ) -> dict[str, Any]:
         if not self.executable:
             return {
                 "ready": False,
@@ -351,11 +339,13 @@ class OpenscadCli:
                 "reason": "openscad_not_found",
                 "allowed_roots": [str(root) for root in self.allowed_roots],
             }
-        probe_timeout = self._timeout(timeout_secs)
-        version_run = self._run(("--version",), min(10, probe_timeout))
+        remaining = self._remaining(deadline)
+        if initial_budget is not None:
+            remaining = min(remaining, initial_budget)
+        version_run = self._run(("--version",), min(10, remaining))
         version_output = (version_run["stdout"] + "\n" + version_run["stderr"]).strip()
         if not version_output:
-            info_run = self._run(("--info",), probe_timeout)
+            info_run = self._run(("--info",), self._remaining(deadline))
             version_output = (info_run["stdout"] + "\n" + info_run["stderr"]).strip()
             ready = info_run["returncode"] == 0
         else:
@@ -371,15 +361,24 @@ class OpenscadCli:
             "max_timeout_secs": self.max_timeout_secs,
         }
 
+    @staticmethod
+    def _remaining(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise OpenScadTimeoutError("OpenSCAD exceeded the configured timeout")
+        return remaining
+
     def capabilities(
         self,
         status: Optional[Mapping[str, Any]] = None,
         timeout_secs: float = 20,
     ) -> dict[str, Any]:
-        status = dict(status) if status is not None else self.status(timeout_secs)
+        timeout = self._timeout(timeout_secs)
+        deadline = time.monotonic() + timeout
+        status = dict(status) if status is not None else self._status_until(deadline, timeout)
         if not status["ready"]:
             return {"ready": False, "status": status, "flags": {}, "output_extensions": []}
-        help_run = self._run(("--help",), min(10, self._timeout(timeout_secs)))
+        help_run = self._run(("--help",), min(10, self._remaining(deadline)))
         help_text = help_run["stdout"] + "\n" + help_run["stderr"]
         flags = {
             name: name in help_text

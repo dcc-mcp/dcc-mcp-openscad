@@ -8,7 +8,7 @@ is installed into the OpenSCAD application. The canonical raw guide is
 
 - OpenSCAD 2021.01 or newer from the official project or an operating-system
   package repository.
-- External Python 3.7 or newer with `dcc-mcp-core>=0.19.91,<1.0.0`.
+- External Python 3.7 or newer with `dcc-mcp-core>=0.20.14,<1.0.0`.
 - Read/write access to each path in `DCC_MCP_OPENSCAD_ALLOWED_ROOTS`.
 
 The adapter does not download, scrape, update, or execute a remote OpenSCAD
@@ -35,11 +35,15 @@ probe before starting the service:
 ```shell
 python -m pip install dcc-mcp-openscad
 dcc-mcp-openscad doctor --json
+dcc-mcp-openscad install --dry-run --json
+dcc-mcp-openscad install --yes --json
 ```
 
 Proceed only when the JSON response has exit `0` and
 `verify.directly_usable=true`. Follow the structured `next_steps` command for
-other outcomes.
+other outcomes. `install` records the exact external Python, Core module, and
+OS-managed OpenSCAD executable identities; it never installs or downloads the
+OpenSCAD application.
 
 Set the allowed workspace before starting the foreground adapter service:
 
@@ -63,6 +67,7 @@ The persistent environment equivalent is:
 
 ```text
 DCC_MCP_OPENSCAD_EXECUTABLE=<absolute-openscad-cli>
+DCC_MCP_OPENSCAD_RECEIPT=<absolute-adapter-receipt-path>
 DCC_MCP_OPENSCAD_ALLOWED_ROOTS=<path-list-using-the-platform-separator>
 DCC_MCP_OPENSCAD_MAX_SOURCE_BYTES=4194304
 DCC_MCP_OPENSCAD_MAX_TIMEOUT_SECS=1800
@@ -70,7 +75,27 @@ DCC_MCP_OPENSCAD_MAX_TIMEOUT_SECS=1800
 
 Windows path lists use `;`; macOS and Linux use `:`. Invalid numeric settings
 or missing roots fail preflight. This standalone adapter has no plugin copy,
-host receipt, registration step, or host-side Python installation.
+host-side Python installation, application registration, or binary cache. Its
+receipt is adapter-owned metadata only and defaults to
+`~/.dcc-mcp/receipts/openscad.json`.
+
+## Lifecycle
+
+The public CLI implements the official Core Install SOP schema with six verbs:
+
+| Verb | Effect |
+| --- | --- |
+| `doctor` | Probe prerequisites and report a plan without mutation |
+| `install` | Atomically record the selected, verified runtime identities |
+| `status` | Compare the current runtime with the owned receipt |
+| `verify` | Re-probe and freshly recapture every identity |
+| `upgrade` | Replace an existing owned receipt after re-verification |
+| `uninstall` | Remove only the owned adapter receipt |
+
+Mutations require `--yes`; `--dry-run` returns the exact plan. A same-directory
+lock serializes receipt changes. Installs and upgrades stage a complete receipt
+and atomically replace it; a failed commit keeps the prior valid receipt.
+Uninstall rolls a displaced receipt back if deletion cannot complete.
 
 ## Verify
 
@@ -82,7 +107,7 @@ dcc-mcp-openscad verify --executable <absolute-openscad-cli> --timeout-secs 20 -
 
 The result reports executable source and launcher, local CLI endpoint,
 workspace/limit configuration, Core and OpenSCAD versions, detected flags, and
-supported output extensions. Schema `1.0` includes
+supported output extensions. Schema `1` includes
 `verify.directly_usable`, `failure_stage`, `failure_reason`, and
 machine-executable `next_steps`.
 
@@ -92,7 +117,10 @@ Stable exits are:
 | --- | --- |
 | `0` | Core, executable, OpenSCAD version, and capability probe are usable |
 | `10` | Discovery, configuration, Core floor, or 2021.01 host floor failed |
+| `20` | External artifact acquisition failed (not used by this non-provisioning adapter) |
+| `30` | Receipt installation, upgrade, lock, or rollback failed |
 | `40` | The executable was found but runtime/capability verification failed |
+| `50` | A host restart is required (not used by the standalone CLI) |
 
 The repository's real CLI acceptance uses
 `examples/production_smoke.scad` to validate, export STL, and render PNG through
@@ -109,12 +137,14 @@ all supported runner platforms.
 
 ## Upgrade
 
-Stop the foreground adapter, upgrade the wheel, upgrade OpenSCAD through its
-own trusted installer/package manager, and rerun doctor:
+Stop the foreground adapter, upgrade the wheel or OpenSCAD through their own
+trusted installers, inspect the lifecycle plan, then atomically replace the
+owned receipt:
 
 ```shell
 python -m pip install --upgrade dcc-mcp-openscad
-dcc-mcp-openscad doctor --json
+dcc-mcp-openscad upgrade --dry-run --json
+dcc-mcp-openscad upgrade --yes --json
 ```
 
 No mutable "latest" binary URL is used. Python wheel caching is owned by pip;
@@ -124,15 +154,17 @@ selected OS package manager. The adapter itself has no cache to migrate.
 
 ## Uninstall
 
-Stop the foreground service and remove only the Python wheel:
+Stop the foreground service, remove the adapter-owned receipt, then remove the
+Python wheel:
 
 ```shell
+dcc-mcp-openscad uninstall --yes --json
 python -m pip uninstall dcc-mcp-openscad
 ```
 
 Remove OpenSCAD separately through the same trusted installer/package manager
-only when the application itself is no longer required. There is no adapter
-daemon, application plugin, receipt, or binary cache to remove.
+only when the application itself is no longer required. The lifecycle command
+does not remove the application, an operator-owned file, or a binary cache.
 
 ## Troubleshooting
 
@@ -145,6 +177,11 @@ daemon, application plugin, receipt, or binary cache to remove.
 - `core_version`, exit `10`: upgrade Core in the external Python that owns the
   adapter wheel.
 - `host_version`, exit `10`: select OpenSCAD 2021.01 or newer.
+- `receipt` or `ownership`, exit `30`/`40`: keep the receipt on a regular,
+  non-reparse path and use `upgrade --yes` to adopt an intentionally changed
+  Core, Python, or OpenSCAD executable.
+- `lock` or `cleanup`, exit `30`/`40`: wait for the current lifecycle mutation
+  to finish; cleanup failures are reported and never hidden as success.
 - `runtime_start` or `runtime_timeout`, exit `40`: run `--version` directly as
   the same user, check executable permissions and endpoint path, then retry.
 - `capability_probe`, exit `40`: verify `--help` succeeds for the same CLI;
