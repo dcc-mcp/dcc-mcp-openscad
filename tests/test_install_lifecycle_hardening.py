@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -516,12 +519,34 @@ def test_nonfinite_timeout_is_rejected_before_runtime_io(
     assert failed["verify"]["failure_reason"] == "timeout_invalid"
 
 
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
+def test_bounded_probe_rejects_nonfinite_deadlines_before_temp_or_launch(
+    timeout: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    monkeypatch.setattr(
+        process_module.tempfile,
+        "mkdtemp",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("temp setup must not run")),
+    )
+
+    with pytest.raises(ValueError, match="timeout must be finite"):
+        process_module.run_bounded_command([sys.executable, "-c", "pass"], timeout=timeout)
+
+
 def _pid_alive(pid: int) -> bool:
     if os.name != "nt":
         try:
             os.kill(pid, 0)
         except OSError:
             return False
+        proc_stat = Path("/proc") / str(pid) / "stat"
+        try:
+            if proc_stat.read_text(encoding="utf-8").split()[2] == "Z":
+                return False
+        except (OSError, IndexError):
+            pass
         return True
     import ctypes
     from ctypes import wintypes
@@ -581,6 +606,48 @@ def test_probe_timeout_owns_the_full_process_tree_and_leaves_no_orphan(tmp_path:
         time.sleep(0.02)
     assert not _pid_alive(root_pid)
     assert not _pid_alive(child_pid)
+
+
+def test_probe_root_first_exit_reaps_descendant_with_inherited_output_handles(
+    tmp_path: Path,
+) -> None:
+    from dcc_mcp_openscad._process import run_bounded_command
+
+    identities = tmp_path / "root-first-identities.txt"
+    ready = tmp_path / "root-first-ready.txt"
+    descendant = (
+        "import os,pathlib,time; "
+        f"pathlib.Path({ready.as_posix()!r}).write_text(str(os.getpid()), encoding='utf-8'); "
+        "time.sleep(60)"
+    )
+    root = (
+        "import os,pathlib,subprocess,sys,time; "
+        f"child=subprocess.Popen([sys.executable,'-c',{descendant!r}]); "
+        f"pathlib.Path({identities.as_posix()!r}).write_text("
+        "str(os.getpid())+' '+str(child.pid), encoding='utf-8'); "
+        f"deadline=time.monotonic()+3; "
+        f'exec("while not pathlib.Path({ready.as_posix()!r}).is_file() '
+        'and time.monotonic()<deadline: time.sleep(0.01)"); '
+        "print('root completed', flush=True)"
+    )
+
+    outcome = run_bounded_command([sys.executable, "-c", root], timeout=3.0)
+
+    assert outcome["success"] is True
+    assert outcome["returncode"] == 0
+    assert outcome["stdout"].splitlines() == ["root completed"]
+    assert outcome["stderr"] == ""
+    assert ready.is_file()
+    root_pid, descendant_pid = (
+        int(value) for value in identities.read_text(encoding="utf-8").split()
+    )
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and any(
+        _pid_alive(pid) for pid in (root_pid, descendant_pid)
+    ):
+        time.sleep(0.02)
+    assert not _pid_alive(root_pid)
+    assert not _pid_alive(descendant_pid)
 
 
 def test_probe_cancellation_cleans_tree_and_private_directory_before_reraising(
@@ -657,6 +724,285 @@ def test_probe_supervisor_ignores_hostile_python_startup(
     assert outcome["success"] is True
     assert captured[:3] == [sys.executable, "-I", "-S"]
     assert not marker.exists()
+
+
+def test_probe_delayed_launch_cannot_receive_a_second_timeout_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    original_start = process_module._start_owned_process
+    wait_budgets: list[float] = []
+
+    def delayed_start(command, *, env, cwd):
+        process, owner = original_start(command, env=env, cwd=cwd)
+        original_wait_empty = owner.wait_empty
+
+        def recording_wait_empty(wait_timeout):
+            wait_budgets.append(wait_timeout)
+            return original_wait_empty(wait_timeout)
+
+        owner.wait_empty = recording_wait_empty
+        time.sleep(0.2)
+        return process, owner
+
+    monkeypatch.setattr(process_module, "_start_owned_process", delayed_start)
+
+    outcome = process_module.run_bounded_command(
+        [sys.executable, "-I", "-S", "-c", "print('completed after launch delay')"],
+        timeout=0.05,
+    )
+
+    assert outcome == {
+        "success": False,
+        "reason": "probe_cleanup_failed",
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+        "truncated": False,
+    }
+    assert wait_budgets
+    assert 0 <= wait_budgets[0] <= 0.05
+
+
+def test_probe_expired_temp_setup_does_not_start_a_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    private_root = tmp_path / "expired-before-launch"
+    start_called = False
+
+    def delayed_root(prefix: str) -> str:
+        assert prefix == "dcc-mcp-openscad-probe-"
+        private_root.mkdir()
+        time.sleep(0.1)
+        return str(private_root)
+
+    def unexpected_start(*_args, **_kwargs):
+        nonlocal start_called
+        start_called = True
+        raise AssertionError("expired setup must not launch a process")
+
+    monkeypatch.setattr(process_module.tempfile, "mkdtemp", delayed_root)
+    monkeypatch.setattr(process_module, "_start_owned_process", unexpected_start)
+
+    outcome = process_module.run_bounded_command(
+        [sys.executable, "-I", "-S", "-c", "raise SystemExit(99)"],
+        timeout=0.05,
+    )
+
+    assert start_called is False
+    assert outcome["success"] is False
+    assert outcome["reason"] == "probe_timeout"
+    assert not private_root.exists()
+
+
+def test_probe_process_accounting_error_is_stable_and_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    original_start = process_module._start_owned_process
+
+    def unobservable_owner(command, *, env, cwd):
+        process, owner = original_start(command, env=env, cwd=cwd)
+
+        def fail_accounting(_timeout):
+            raise OSError("private/operator/process-accounting")
+
+        owner.wait_empty = fail_accounting
+        return process, owner
+
+    monkeypatch.setattr(process_module, "_start_owned_process", unobservable_owner)
+
+    outcome = process_module.run_bounded_command(
+        [sys.executable, "-I", "-S", "-c", "print('ok')"],
+        timeout=2.0,
+    )
+
+    assert outcome == {
+        "success": False,
+        "reason": "probe_cleanup_failed",
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+        "truncated": False,
+    }
+    assert "private" not in json.dumps(outcome)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX controller ownership")
+def test_probe_controller_sigkill_after_descendant_ready_leaves_no_owned_process(
+    tmp_path: Path,
+) -> None:
+    identities = tmp_path / "controller-death-identities.txt"
+    ready = tmp_path / "controller-death-ready.txt"
+    completed = tmp_path / "controller-returned.txt"
+    descendant = (
+        "import os,pathlib,socket,time; "
+        "listener=socket.socket(); listener.bind(('127.0.0.1',0)); listener.listen(1); "
+        f"pathlib.Path({ready.as_posix()!r}).write_text("
+        "str(os.getpid())+' '+str(listener.getsockname()[1]), encoding='utf-8'); "
+        "time.sleep(60)"
+    )
+    root = (
+        "import os,pathlib,subprocess,sys,time; "
+        f"child=subprocess.Popen([sys.executable,'-c',{descendant!r}]); "
+        f"pathlib.Path({identities.as_posix()!r}).write_text("
+        "str(os.getppid())+' '+str(os.getpid())+' '+str(child.pid), encoding='utf-8'); "
+        "time.sleep(60)"
+    )
+    controller_source = (
+        "import pathlib,sys; "
+        "from dcc_mcp_openscad._process import run_bounded_command; "
+        f"run_bounded_command([sys.executable,'-c',{root!r}], timeout=30.0); "
+        f"pathlib.Path({completed.as_posix()!r}).write_text('returned', encoding='utf-8')"
+    )
+    repo_src = Path(__file__).resolve().parents[1] / "src"
+    controller_env = dict(os.environ)
+    controller_env["PYTHONPATH"] = str(repo_src)
+    controller = subprocess.Popen(
+        [sys.executable, "-c", controller_source],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        env=controller_env,
+    )
+    supervisor_pid = None
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not (identities.is_file() and ready.is_file()):
+            time.sleep(0.01)
+        assert identities.is_file()
+        assert ready.is_file()
+        supervisor_pid, root_pid, descendant_pid = (
+            int(value) for value in identities.read_text(encoding="utf-8").split()
+        )
+        ready_pid, listener_port = (
+            int(value) for value in ready.read_text(encoding="utf-8").split()
+        )
+        assert ready_pid == descendant_pid
+        assert os.getpgid(supervisor_pid) == supervisor_pid
+        assert os.getsid(supervisor_pid) == supervisor_pid
+        with socket.create_connection(("127.0.0.1", listener_port), timeout=1):
+            pass
+
+        os.kill(controller.pid, signal.SIGKILL)
+        controller.wait(timeout=3)
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and any(
+            _pid_alive(pid) for pid in (supervisor_pid, root_pid, descendant_pid)
+        ):
+            time.sleep(0.02)
+        assert not completed.exists()
+        assert not _pid_alive(supervisor_pid)
+        assert not _pid_alive(root_pid)
+        assert not _pid_alive(descendant_pid)
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", listener_port), timeout=0.2)
+    finally:
+        if controller.poll() is None:
+            controller.kill()
+            controller.wait(timeout=3)
+        if supervisor_pid is not None and _pid_alive(supervisor_pid):
+            try:
+                if (
+                    os.getpgid(supervisor_pid) == supervisor_pid
+                    and os.getsid(supervisor_pid) == supervisor_pid
+                ):
+                    os.killpg(supervisor_pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group accounting")
+def test_posix_wait_empty_fails_closed_while_owned_group_has_a_live_member() -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    process, owner = process_module._start_owned_process(
+        [sys.executable, "-I", "-S", "-c", "import time; time.sleep(60)"],
+        env=None,
+        cwd=None,
+    )
+    try:
+        assert owner.wait_empty(0.05) is False
+    finally:
+        owner.terminate()
+        process.wait(timeout=3)
+        owner.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group accounting")
+def test_posix_wait_empty_treats_an_unreaped_zombie_as_non_live() -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    process, owner = process_module._start_owned_process(
+        [sys.executable, "-I", "-S", "-c", "pass"],
+        env=None,
+        cwd=None,
+    )
+    try:
+        time.sleep(0.1)
+        assert owner.wait_empty(1.0) is True
+    finally:
+        process.wait(timeout=3)
+        owner.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group accounting")
+def test_posix_wait_empty_fails_closed_when_process_accounting_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    process, owner = process_module._start_owned_process(
+        [sys.executable, "-I", "-S", "-c", "import time; time.sleep(60)"],
+        env=None,
+        cwd=None,
+    )
+    try:
+        monkeypatch.setattr(
+            process_module,
+            "_posix_live_members",
+            lambda *_args, **_kwargs: None,
+        )
+        assert owner.wait_empty(0.1) is False
+    finally:
+        owner.terminate()
+        process.wait(timeout=3)
+        owner.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group identity")
+def test_posix_terminate_never_signals_a_changed_session_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    process, owner = process_module._start_owned_process(
+        [sys.executable, "-I", "-S", "-c", "import time; time.sleep(60)"],
+        env=None,
+        cwd=None,
+    )
+    signalled: list[tuple[int, int]] = []
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(process_module.os, "getpgid", lambda _pid: process.pid + 1)
+            scoped.setattr(
+                process_module.os,
+                "killpg",
+                lambda pgid, sig: signalled.append((pgid, sig)),
+            )
+            with pytest.raises(ProcessLookupError):
+                owner.terminate()
+        assert signalled == []
+    finally:
+        owner.terminate()
+        process.wait(timeout=3)
+        owner.close()
 
 
 def test_status_and_capabilities_share_one_caller_deadline(tmp_path: Path) -> None:
