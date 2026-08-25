@@ -838,13 +838,23 @@ def test_probe_oversized_output_is_never_read_without_a_bound(
     import dcc_mcp_openscad._process as process_module
 
     original_read = process_module.os.read
+    original_open_bound_output = process_module._open_bound_output
     read_sizes = []
+    output_fds = set()
+
+    def track_output_fd(path: Path, expected, deadline: float):
+        fd, snapshot = original_open_bound_output(path, expected, deadline)
+        if path.name in {"stdout.bin", "stderr.bin"}:
+            output_fds.add(fd)
+        return fd, snapshot
 
     def reject_unbounded_read(fd: int, size: int) -> bytes:
-        read_sizes.append(size)
-        assert 0 <= size <= process_module._MAX_OUTPUT_BYTES + 1
+        if fd in output_fds:
+            read_sizes.append(size)
+            assert 0 <= size <= process_module._MAX_OUTPUT_BYTES + 1
         return original_read(fd, size)
 
+    monkeypatch.setattr(process_module, "_open_bound_output", track_output_fd)
     monkeypatch.setattr(process_module.os, "read", reject_unbounded_read)
     output_bytes = process_module._MAX_OUTPUT_BYTES + 8_192
 
