@@ -7,12 +7,13 @@ import math
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from dcc_mcp_core.skills_helper import check_dcc_cancelled
 
@@ -439,24 +440,226 @@ def _remove_probe_directory(root: Path, deadline: float) -> bool:
             time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
 
 
-def _read_bounded_output(path: Path, deadline: float) -> Tuple[bytes, bool, bool]:
-    """Read at most the public limit plus one byte under the caller deadline."""
+class _OutputDeadlineExpired(Exception):
+    """The caller-owned output deadline expired during a filesystem operation."""
+
+
+class _OutputSnapshot(NamedTuple):
+    identity: Tuple[int, int]
+    size: int
+
+
+def _check_output_deadline(deadline: float) -> None:
     if time.monotonic() >= deadline:
-        return b"", True, False
+        raise _OutputDeadlineExpired
+
+
+def _posix_snapshot(value: os.stat_result) -> _OutputSnapshot:
+    if not stat.S_ISREG(value.st_mode):
+        raise OSError("probe output is not a regular file")
+    return _OutputSnapshot((int(value.st_dev), int(value.st_ino)), int(value.st_size))
+
+
+def _close_windows_handle(handle: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    if not kernel32.CloseHandle(handle):
+        raise OSError(ctypes.get_last_error(), "CloseHandle failed")
+
+
+def _windows_handle_snapshot(handle: int, deadline: float) -> _OutputSnapshot:
+    import ctypes
+    from ctypes import wintypes
+
+    class _ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("FileAttributes", wintypes.DWORD),
+            ("CreationTime", wintypes.FILETIME),
+            ("LastAccessTime", wintypes.FILETIME),
+            ("LastWriteTime", wintypes.FILETIME),
+            ("VolumeSerialNumber", wintypes.DWORD),
+            ("FileSizeHigh", wintypes.DWORD),
+            ("FileSizeLow", wintypes.DWORD),
+            ("NumberOfLinks", wintypes.DWORD),
+            ("FileIndexHigh", wintypes.DWORD),
+            ("FileIndexLow", wintypes.DWORD),
+        ]
+
+    _check_output_deadline(deadline)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_ByHandleFileInformation),
+    ]
+    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    information = _ByHandleFileInformation()
+    if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(information)):
+        raise OSError(ctypes.get_last_error(), "GetFileInformationByHandle failed")
+    _check_output_deadline(deadline)
+    if information.FileAttributes & 0x00000010:
+        raise OSError("probe output is a directory")
+    if information.FileAttributes & 0x00000400:
+        raise OSError("probe output is a reparse point")
+    identity = (
+        int(information.VolumeSerialNumber),
+        (int(information.FileIndexHigh) << 32) | int(information.FileIndexLow),
+    )
+    size = (int(information.FileSizeHigh) << 32) | int(information.FileSizeLow)
+    return _OutputSnapshot(identity, size)
+
+
+def _open_windows_path_handle(path: Path, deadline: float) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    _check_output_deadline(deadline)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    handle = kernel32.CreateFileW(
+        str(path),
+        0x80000000,
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,
+        0x00200000 | 0x02000000,
+        None,
+    )
+    if handle == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "CreateFileW failed")
     try:
-        if not path.is_file():
-            return b"", True, time.monotonic() < deadline
-        if time.monotonic() >= deadline:
-            return b"", True, False
-        with path.open("rb") as stream:
-            if time.monotonic() >= deadline:
-                return b"", True, False
-            value = stream.read(_MAX_OUTPUT_BYTES + 1)
+        _check_output_deadline(deadline)
+    except BaseException:
+        _close_windows_handle(handle)
+        raise
+    return int(handle)
+
+
+def _capture_output_path(path: Path, deadline: float) -> _OutputSnapshot:
+    _check_output_deadline(deadline)
+    observed = os.lstat(str(path))
+    _check_output_deadline(deadline)
+    if not stat.S_ISREG(observed.st_mode):
+        raise OSError("probe output is not a regular file")
+    if os.name != "nt":
+        return _posix_snapshot(observed)
+
+    attributes = int(getattr(observed, "st_file_attributes", 0))
+    if attributes & 0x00000400:
+        raise OSError("probe output is a reparse point")
+    handle = _open_windows_path_handle(path, deadline)
+    try:
+        snapshot = _windows_handle_snapshot(handle, deadline)
+    finally:
+        _close_windows_handle(handle)
+    _check_output_deadline(deadline)
+    if int(observed.st_ino) != snapshot.identity[1] or int(observed.st_size) != snapshot.size:
+        raise OSError("probe output identity changed")
+    return snapshot
+
+
+def _open_bound_output(
+    path: Path, expected: _OutputSnapshot, deadline: float
+) -> Tuple[int, _OutputSnapshot]:
+    _check_output_deadline(deadline)
+    if os.name == "nt":
+        import msvcrt
+
+        handle = _open_windows_path_handle(path, deadline)
+        fd = None
+        try:
+            snapshot = _windows_handle_snapshot(handle, deadline)
+            if snapshot != expected:
+                raise OSError("probe output identity changed")
+            _check_output_deadline(deadline)
+            fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | int(getattr(os, "O_BINARY", 0)))
+            handle = 0
+            _check_output_deadline(deadline)
+            observed = os.fstat(fd)
+            _check_output_deadline(deadline)
+            if not stat.S_ISREG(observed.st_mode) or int(observed.st_size) != expected.size:
+                raise OSError("probe output identity changed")
+            return fd, snapshot
+        except BaseException:
+            if fd is not None:
+                os.close(fd)
+            raise
+        finally:
+            if handle:
+                _close_windows_handle(handle)
+
+    no_follow = int(getattr(os, "O_NOFOLLOW", 0))
+    if not no_follow:
+        raise OSError("no-follow file open is unavailable")
+    flags = os.O_RDONLY | no_follow | int(getattr(os, "O_CLOEXEC", 0))
+    fd = os.open(str(path), flags)
+    try:
+        _check_output_deadline(deadline)
+        snapshot = _posix_snapshot(os.fstat(fd))
+        _check_output_deadline(deadline)
+        if snapshot != expected:
+            raise OSError("probe output identity changed")
+        return fd, snapshot
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _recapture_bound_output(fd: int, deadline: float) -> _OutputSnapshot:
+    _check_output_deadline(deadline)
+    observed = os.fstat(fd)
+    _check_output_deadline(deadline)
+    if os.name != "nt":
+        return _posix_snapshot(observed)
+    if not stat.S_ISREG(observed.st_mode):
+        raise OSError("probe output is not a regular file")
+    import msvcrt
+
+    return _windows_handle_snapshot(msvcrt.get_osfhandle(fd), deadline)
+
+
+def _read_bounded_output(path: Path, deadline: float) -> Tuple[bytes, bool, bool]:
+    """Read one identity-bound regular output file under the caller deadline."""
+    fd = None
+    outcome = (b"", False, True)
+    try:
+        initial = _capture_output_path(path, deadline)
+        fd, opened = _open_bound_output(path, initial, deadline)
+        _check_output_deadline(deadline)
+        value = os.read(fd, _MAX_OUTPUT_BYTES + 1)
+        _check_output_deadline(deadline)
+        recaptured = _recapture_bound_output(fd, deadline)
+        expected_size = min(opened.size, _MAX_OUTPUT_BYTES + 1)
+        if recaptured != opened or len(value) != expected_size:
+            raise OSError("probe output changed while being read")
+        final = _capture_output_path(path, deadline)
+        if final != opened:
+            raise OSError("probe output path identity changed")
+    except _OutputDeadlineExpired:
+        outcome = (b"", True, False)
     except OSError:
-        return b"", False, time.monotonic() < deadline
-    if time.monotonic() >= deadline:
-        return b"", True, False
-    return value, True, True
+        outcome = (b"", False, time.monotonic() < deadline)
+    else:
+        outcome = (value, True, True)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                outcome = (b"", False, time.monotonic() < deadline)
+    return outcome
 
 
 def run_bounded_command(
@@ -580,8 +783,8 @@ def run_bounded_command(
         "success": completed and returncode == 0 and not truncated,
         "reason": terminal_reason,
         "returncode": returncode if isinstance(returncode, int) else None,
-        "stdout": stdout[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
-        "stderr": stderr[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
+        "stdout": "" if truncated else stdout[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
+        "stderr": "" if truncated else stderr[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
         "truncated": truncated,
     }
 

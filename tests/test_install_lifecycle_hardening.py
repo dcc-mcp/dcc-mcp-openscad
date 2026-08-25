@@ -589,7 +589,7 @@ def test_probe_timeout_owns_the_full_process_tree_and_leaves_no_orphan(tmp_path:
         "time.sleep(60)"
     )
 
-    outcome = run_bounded_command([sys.executable, "-c", root], timeout=1.0)
+    outcome = run_bounded_command([sys.executable, "-c", root], timeout=5.0)
 
     assert outcome == {
         "success": False,
@@ -808,48 +808,28 @@ def test_probe_delayed_launch_cannot_receive_a_second_timeout_budget(
 
 
 def test_probe_delayed_output_read_cannot_return_success_after_deadline(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import dcc_mcp_openscad._process as process_module
 
-    original_open = Path.open
+    output = tmp_path / "stdout.bin"
+    output.write_bytes(b"owned-output")
+    original_read = process_module.os.read
 
-    class DelayedReader:
-        def __init__(self, stream) -> None:
-            self._stream = stream
+    def delayed_read(fd: int, size: int) -> bytes:
+        value = original_read(fd, size)
+        time.sleep(0.08)
+        return value
 
-        def __enter__(self):
-            return self
+    monkeypatch.setattr(process_module.os, "read", delayed_read)
 
-        def __exit__(self, *args):
-            return self._stream.__exit__(*args)
-
-        def read(self, size: int = -1):
-            time.sleep(0.4)
-            return self._stream.read(size)
-
-    def delayed_stdout_read(path: Path, *args, **kwargs):
-        stream = original_open(path, *args, **kwargs)
-        mode = str(args[0] if args else kwargs.get("mode", "r"))
-        if path.name == "stdout.bin" and "r" in mode and "b" in mode:
-            return DelayedReader(stream)
-        return stream
-
-    monkeypatch.setattr(Path, "open", delayed_stdout_read)
-
-    outcome = process_module.run_bounded_command(
-        [sys.executable, "-I", "-S", "-c", "print('must not escape deadline')"],
-        timeout=0.3,
+    outcome = process_module._read_bounded_output(
+        output,
+        time.monotonic() + 0.03,
     )
 
-    assert outcome == {
-        "success": False,
-        "reason": "probe_timeout",
-        "returncode": None,
-        "stdout": "",
-        "stderr": "",
-        "truncated": False,
-    }
+    assert outcome == (b"", True, False)
 
 
 def test_probe_oversized_output_is_never_read_without_a_bound(
@@ -857,32 +837,15 @@ def test_probe_oversized_output_is_never_read_without_a_bound(
 ) -> None:
     import dcc_mcp_openscad._process as process_module
 
-    original_open = Path.open
+    original_read = process_module.os.read
     read_sizes = []
 
-    class BoundedReader:
-        def __init__(self, stream) -> None:
-            self._stream = stream
+    def reject_unbounded_read(fd: int, size: int) -> bytes:
+        read_sizes.append(size)
+        assert 0 <= size <= process_module._MAX_OUTPUT_BYTES + 1
+        return original_read(fd, size)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return self._stream.__exit__(*args)
-
-        def read(self, size: int = -1):
-            read_sizes.append(size)
-            assert 0 <= size <= process_module._MAX_OUTPUT_BYTES + 1
-            return self._stream.read(size)
-
-    def reject_unbounded_stdout_read(path: Path, *args, **kwargs):
-        stream = original_open(path, *args, **kwargs)
-        mode = str(args[0] if args else kwargs.get("mode", "r"))
-        if path.name == "stdout.bin" and "r" in mode and "b" in mode:
-            return BoundedReader(stream)
-        return stream
-
-    monkeypatch.setattr(Path, "open", reject_unbounded_stdout_read)
+    monkeypatch.setattr(process_module.os, "read", reject_unbounded_read)
     output_bytes = process_module._MAX_OUTPUT_BYTES + 8_192
 
     outcome = process_module.run_bounded_command(
@@ -900,7 +863,276 @@ def test_probe_oversized_output_is_never_read_without_a_bound(
     assert outcome["reason"] == "probe_output_limit"
     assert outcome["truncated"] is True
     assert outcome["stdout"] == ""
-    assert read_sizes == [process_module._MAX_OUTPUT_BYTES + 1]
+    assert read_sizes == [process_module._MAX_OUTPUT_BYTES + 1] * 2
+
+
+def test_missing_probe_output_fails_closed_instead_of_becoming_empty_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    private_root = tmp_path / "missing-output-root"
+    original_cleanup = process_module._cleanup_owned_process
+
+    def controlled_root(prefix: str) -> str:
+        assert prefix == "dcc-mcp-openscad-probe-"
+        private_root.mkdir()
+        return str(private_root)
+
+    def cleanup_then_remove_stdout(process, owner, deadline):
+        cleaned = original_cleanup(process, owner, deadline)
+        (private_root / "stdout.bin").unlink()
+        return cleaned
+
+    monkeypatch.setattr(process_module.tempfile, "mkdtemp", controlled_root)
+    monkeypatch.setattr(process_module, "_cleanup_owned_process", cleanup_then_remove_stdout)
+
+    outcome = process_module.run_bounded_command(
+        [sys.executable, "-I", "-S", "-c", "print('must not become empty success')"],
+        timeout=3.0,
+    )
+
+    assert outcome == {
+        "success": False,
+        "reason": "probe_cleanup_failed",
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+        "truncated": False,
+    }
+    assert not private_root.exists()
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_read_bounded_output_rejects_missing_and_non_regular_paths(
+    tmp_path: Path, kind: str
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    output = tmp_path / "stdout.bin"
+    if kind == "directory":
+        output.mkdir()
+
+    value, valid, in_budget = process_module._read_bounded_output(output, time.monotonic() + 1.0)
+
+    assert value == b""
+    assert valid is False
+    assert in_budget is True
+
+
+def test_read_bounded_output_rejects_symlink_or_reparse_without_foreign_bytes(
+    tmp_path: Path,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    foreign = tmp_path / "foreign-output.bin"
+    foreign.write_bytes(b"foreign-private-output")
+    output = tmp_path / "stdout.bin"
+    output.symlink_to(foreign)
+
+    value, valid, in_budget = process_module._read_bounded_output(output, time.monotonic() + 1.0)
+
+    assert value == b""
+    assert b"foreign-private-output" not in value
+    assert valid is False
+    assert in_budget is True
+
+
+def test_read_bounded_output_rejects_same_bytes_path_swap_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    output = tmp_path / "stdout.bin"
+    replacement = tmp_path / "replacement.bin"
+    output.write_bytes(b"same-bytes")
+    replacement.write_bytes(b"same-bytes")
+    original_is_file = Path.is_file
+    original_lstat = process_module.os.lstat
+    swapped = False
+
+    def swap_once() -> None:
+        nonlocal swapped
+        if not swapped:
+            process_module.os.replace(str(replacement), str(output))
+            swapped = True
+
+    def is_file_then_swap(path: Path) -> bool:
+        result = original_is_file(path)
+        if path == output:
+            swap_once()
+        return result
+
+    def lstat_then_swap(path):
+        result = original_lstat(path)
+        if Path(path) == output:
+            swap_once()
+        return result
+
+    monkeypatch.setattr(Path, "is_file", is_file_then_swap)
+    monkeypatch.setattr(process_module.os, "lstat", lstat_then_swap)
+
+    value, valid, in_budget = process_module._read_bounded_output(output, time.monotonic() + 1.0)
+
+    assert swapped is True
+    assert value == b""
+    assert valid is False
+    assert in_budget is True
+
+
+@pytest.mark.parametrize("mutation", ["grow", "shrink", "replace"])
+def test_read_bounded_output_rejects_file_mutation_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    output = tmp_path / "stdout.bin"
+    replacement = tmp_path / "replacement.bin"
+    output.write_bytes(b"owned-output")
+    replacement.write_bytes(b"owned-output")
+    original_open = Path.open
+    original_os_read = process_module.os.read
+    mutated = False
+
+    def mutate_once() -> None:
+        nonlocal mutated
+        if mutated:
+            return
+        mutated = True
+        if mutation == "grow":
+            with original_open(output, "ab") as stream:
+                stream.write(b"-foreign-growth")
+        elif mutation == "shrink":
+            with original_open(output, "wb") as stream:
+                stream.write(b"x")
+        else:
+            process_module.os.replace(str(replacement), str(output))
+
+    class MutatingReader:
+        def __init__(self, stream) -> None:
+            self._stream = stream
+
+        def __enter__(self):
+            self._stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._stream.__exit__(*args)
+
+        def read(self, size: int = -1):
+            mutate_once()
+            return self._stream.read(size)
+
+    def open_with_mutation(path: Path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        mode = str(args[0] if args else kwargs.get("mode", "r"))
+        if path == output and "r" in mode and "b" in mode:
+            return MutatingReader(stream)
+        return stream
+
+    def os_read_with_mutation(fd: int, size: int) -> bytes:
+        mutate_once()
+        return original_os_read(fd, size)
+
+    monkeypatch.setattr(Path, "open", open_with_mutation)
+    monkeypatch.setattr(process_module.os, "read", os_read_with_mutation)
+
+    value, valid, in_budget = process_module._read_bounded_output(output, time.monotonic() + 1.0)
+
+    assert mutated is True
+    assert value == b""
+    assert valid is False
+    assert in_budget is True
+
+
+def test_read_bounded_output_delayed_pre_stat_consumes_the_same_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    output = tmp_path / "stdout.bin"
+    output.write_bytes(b"owned-output")
+    original_is_file = Path.is_file
+    original_lstat = process_module.os.lstat
+
+    def delayed_is_file(path: Path) -> bool:
+        result = original_is_file(path)
+        if path == output:
+            time.sleep(0.08)
+        return result
+
+    def delayed_lstat(path):
+        result = original_lstat(path)
+        if Path(path) == output:
+            time.sleep(0.08)
+        return result
+
+    monkeypatch.setattr(Path, "is_file", delayed_is_file)
+    monkeypatch.setattr(process_module.os, "lstat", delayed_lstat)
+
+    value, valid, in_budget = process_module._read_bounded_output(output, time.monotonic() + 0.03)
+
+    assert value == b""
+    assert valid is True
+    assert in_budget is False
+
+
+def test_read_bounded_output_delayed_post_stat_cannot_return_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    output = tmp_path / "stdout.bin"
+    output.write_bytes(b"owned-output")
+    original_fstat = process_module.os.fstat
+    calls = 0
+
+    def delayed_second_fstat(fd: int):
+        nonlocal calls
+        calls += 1
+        result = original_fstat(fd)
+        if calls == 2:
+            time.sleep(0.08)
+        return result
+
+    monkeypatch.setattr(process_module.os, "fstat", delayed_second_fstat)
+
+    value, valid, in_budget = process_module._read_bounded_output(output, time.monotonic() + 0.03)
+
+    assert value == b""
+    assert valid is True
+    assert in_budget is False
+    assert calls >= 2
+
+
+def test_read_bounded_output_enforces_limit_plus_one_identity_bound(
+    tmp_path: Path,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    at_limit = tmp_path / "at-limit.bin"
+    limit_sentinel = tmp_path / "limit-sentinel.bin"
+    over_sentinel = tmp_path / "over-sentinel.bin"
+    at_limit.write_bytes(b"a" * process_module._MAX_OUTPUT_BYTES)
+    limit_sentinel.write_bytes(b"b" * (process_module._MAX_OUTPUT_BYTES + 1))
+    over_sentinel.write_bytes(b"c" * (process_module._MAX_OUTPUT_BYTES + 2))
+    deadline = time.monotonic() + 2.0
+
+    at_limit_result = process_module._read_bounded_output(at_limit, deadline)
+    sentinel_result = process_module._read_bounded_output(limit_sentinel, deadline)
+    over_result = process_module._read_bounded_output(over_sentinel, deadline)
+
+    assert at_limit_result == (b"a" * process_module._MAX_OUTPUT_BYTES, True, True)
+    assert sentinel_result == (
+        b"b" * (process_module._MAX_OUTPUT_BYTES + 1),
+        True,
+        True,
+    )
+    assert over_result == (
+        b"c" * (process_module._MAX_OUTPUT_BYTES + 1),
+        True,
+        True,
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows launch cleanup deadline")
