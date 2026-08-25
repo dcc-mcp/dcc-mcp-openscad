@@ -5,6 +5,7 @@ import json
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -14,6 +15,26 @@ from dcc_mcp_core.server_base import DccServerBase
 from .__version__ import __version__
 
 _server: Optional["OpenscadMcpServer"] = None
+
+
+class _ArgumentFailure(RuntimeError):
+    pass
+
+
+class _ParserCompleted(RuntimeError):
+    pass
+
+
+class _SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        del message
+        raise _ArgumentFailure("invalid arguments")
+
+    def exit(self, status: int = 0, message: Optional[str] = None) -> None:
+        del message
+        if status == 0:
+            raise _ParserCompleted
+        raise _ArgumentFailure("argument parser exited")
 
 
 class OpenscadMcpServer(DccServerBase):
@@ -50,14 +71,22 @@ def stop_server():
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run or verify the OpenSCAD adapter.")
+    parser = _SafeArgumentParser(description="Run or manage the OpenSCAD adapter.")
     parser.add_argument("--version", action="version", version=__version__)
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    for operation in ("doctor", "verify"):
-        command = subparsers.add_parser(operation, help="Verify the standalone OpenSCAD CLI.")
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, parser_class=_SafeArgumentParser
+    )
+    for operation in ("doctor", "install", "status", "verify", "uninstall", "upgrade"):
+        command = subparsers.add_parser(
+            operation,
+            help="Run the %s lifecycle operation." % operation,
+        )
         command.add_argument("--json", action="store_true", dest="json_output")
         command.add_argument("--executable", "--openscad", type=Path)
         command.add_argument("--timeout-secs", type=float, default=20.0)
+        command.add_argument("--receipt-path", type=Path)
+        command.add_argument("--yes", action="store_true")
+        command.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -86,18 +115,32 @@ def _run_server() -> None:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the legacy no-argument service or a standalone verification command."""
+    started = time.monotonic()
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not arguments:
         _run_server()
         return 0
-    args = _build_parser().parse_args(arguments)
     from .doctor import DoctorRequest, run_doctor
+
+    try:
+        args = _build_parser().parse_args(arguments)
+    except _ParserCompleted:
+        return 0
+    except _ArgumentFailure:
+        operation = arguments[0] if arguments and not arguments[0].startswith("-") else "invalid"
+        result = run_doctor(DoctorRequest(operation=operation, timeout_secs=-1))
+        _print_doctor_result(result, json_output="--json" in arguments)
+        return int(result["exit_code"])
 
     result = run_doctor(
         DoctorRequest(
             operation=args.command,
             executable=args.executable,
             timeout_secs=args.timeout_secs,
+            receipt_path=args.receipt_path,
+            yes=args.yes,
+            dry_run=args.dry_run,
+            deadline=started + args.timeout_secs,
         )
     )
     _print_doctor_result(result, json_output=args.json_output)

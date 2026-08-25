@@ -29,7 +29,7 @@ The adapter does not accept arbitrary OpenSCAD command-line arguments or raw
 ## Requirements
 
 - Python 3.7+
-- `dcc-mcp-core` 0.19.91+
+- `dcc-mcp-core` 0.20.14+
 - OpenSCAD 2021.01 or newer
 
 On Windows, point to `openscad.com` when possible; if `openscad.exe` is
@@ -38,12 +38,14 @@ launcher automatically.
 
 ## Install
 
-See [`install.md`](install.md) for wheel-only setup, platform discovery, JSON
-doctor/verify, upgrade, uninstall, and troubleshooting.
+See [`install.md`](install.md) for wheel-only setup, platform discovery, the
+official six-verb Install SOP lifecycle, ownership receipts, rollback, and
+troubleshooting.
 
 ```bash
 python -m pip install dcc-mcp-openscad
 dcc-mcp-openscad doctor --json
+dcc-mcp-openscad install --yes --json
 dcc-mcp-openscad
 ```
 
