@@ -73,6 +73,21 @@ def test_uses_only_the_official_core_02014_install_contract() -> None:
     assert 'dependencies=["dcc-mcp-core>=0.20.14,<1.0.0"]' in pyproject.read_text(encoding="utf-8")
 
 
+def test_core_identity_binds_the_resolved_managed_python_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad.doctor as lifecycle
+
+    real_python = Path(sys.executable).resolve(strict=True)
+    managed_entrypoint = tmp_path / ("python.exe" if os.name == "nt" else "python")
+    managed_entrypoint.symlink_to(real_python)
+    monkeypatch.setattr(lifecycle.sys, "executable", str(managed_entrypoint))
+
+    identity = lifecycle._capture_core_identity()
+
+    assert identity["python"]["path"] == str(real_python)
+
+
 def test_every_lifecycle_verb_emits_the_official_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:

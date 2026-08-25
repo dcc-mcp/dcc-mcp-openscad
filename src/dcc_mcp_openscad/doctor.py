@@ -320,7 +320,11 @@ def _capture_core_identity() -> Dict[str, Any]:
         raise LifecycleFailure(EXIT_PREFLIGHT, "core", "core_distribution_invalid") from exc
     if _version_tuple(version) < _version_tuple(MINIMUM_CORE_VERSION):
         raise LifecycleFailure(EXIT_PREFLIGHT, "core", "core_version_unsupported")
-    python_identity = _capture_file_identity(Path(sys.executable))
+    try:
+        python_executable = Path(sys.executable).resolve(strict=True)
+    except OSError as exc:
+        raise LifecycleFailure(EXIT_PREFLIGHT, "core", "python_executable_invalid") from exc
+    python_identity = _capture_file_identity(python_executable)
     module_identity = _capture_file_identity(module)
     return {"version": version, "module": module_identity, "python": python_identity}
 
