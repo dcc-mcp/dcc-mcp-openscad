@@ -57,10 +57,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         or work_deadline > final_deadline
     ):
         return 64
+    if time.monotonic() >= work_deadline:
+        return 72
     command = arguments[6:]
     parent_pid = os.getppid()
     child = None
     with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+        if time.monotonic() >= work_deadline:
+            return 72
         try:
             child = subprocess.Popen(
                 command,

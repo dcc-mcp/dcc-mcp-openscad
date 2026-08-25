@@ -710,9 +710,9 @@ def test_probe_supervisor_ignores_hostile_python_startup(
     captured: list[str] = []
     original_start = process_module._start_owned_process
 
-    def capture_start(command, *, env, cwd):
+    def capture_start(command, *, env, cwd, deadline):
         captured.extend(command)
-        return original_start(command, env=env, cwd=cwd)
+        return original_start(command, env=env, cwd=cwd, deadline=deadline)
 
     monkeypatch.setattr(process_module, "_start_owned_process", capture_start)
     outcome = process_module.run_bounded_command(
@@ -726,6 +726,48 @@ def test_probe_supervisor_ignores_hostile_python_startup(
     assert not marker.exists()
 
 
+def test_probe_supervisor_expired_deadline_has_zero_launch_or_output_side_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._probe_supervisor as supervisor
+
+    status = tmp_path / "status.json"
+    stdout = tmp_path / "stdout.bin"
+    stderr = tmp_path / "stderr.bin"
+    marker = tmp_path / "child-launched.txt"
+    launched = False
+
+    def unexpected_launch(*_args, **_kwargs):
+        nonlocal launched
+        launched = True
+        marker.write_text("launched", encoding="utf-8")
+        raise AssertionError("an expired supervisor must not launch a child")
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", unexpected_launch)
+    expired = time.monotonic() - 1.0
+
+    exit_code = supervisor.main(
+        [
+            str(status),
+            str(stdout),
+            str(stderr),
+            repr(expired),
+            repr(expired),
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(99)",
+        ]
+    )
+
+    assert exit_code == 72
+    assert launched is False
+    assert not marker.exists()
+    assert not status.exists()
+    assert not stdout.exists()
+    assert not stderr.exists()
+
+
 def test_probe_delayed_launch_cannot_receive_a_second_timeout_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -734,8 +776,8 @@ def test_probe_delayed_launch_cannot_receive_a_second_timeout_budget(
     original_start = process_module._start_owned_process
     wait_budgets: list[float] = []
 
-    def delayed_start(command, *, env, cwd):
-        process, owner = original_start(command, env=env, cwd=cwd)
+    def delayed_start(command, *, env, cwd, deadline):
+        process, owner = original_start(command, env=env, cwd=cwd, deadline=deadline)
         original_wait_empty = owner.wait_empty
 
         def recording_wait_empty(wait_timeout):
@@ -763,6 +805,154 @@ def test_probe_delayed_launch_cannot_receive_a_second_timeout_budget(
     }
     assert wait_budgets
     assert 0 <= wait_budgets[0] <= 0.05
+
+
+def test_probe_delayed_output_read_cannot_return_success_after_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    original_open = Path.open
+
+    class DelayedReader:
+        def __init__(self, stream) -> None:
+            self._stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._stream.__exit__(*args)
+
+        def read(self, size: int = -1):
+            time.sleep(0.4)
+            return self._stream.read(size)
+
+    def delayed_stdout_read(path: Path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        mode = str(args[0] if args else kwargs.get("mode", "r"))
+        if path.name == "stdout.bin" and "r" in mode and "b" in mode:
+            return DelayedReader(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", delayed_stdout_read)
+
+    outcome = process_module.run_bounded_command(
+        [sys.executable, "-I", "-S", "-c", "print('must not escape deadline')"],
+        timeout=0.3,
+    )
+
+    assert outcome == {
+        "success": False,
+        "reason": "probe_timeout",
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+        "truncated": False,
+    }
+
+
+def test_probe_oversized_output_is_never_read_without_a_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    original_open = Path.open
+    read_sizes = []
+
+    class BoundedReader:
+        def __init__(self, stream) -> None:
+            self._stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._stream.__exit__(*args)
+
+        def read(self, size: int = -1):
+            read_sizes.append(size)
+            assert 0 <= size <= process_module._MAX_OUTPUT_BYTES + 1
+            return self._stream.read(size)
+
+    def reject_unbounded_stdout_read(path: Path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        mode = str(args[0] if args else kwargs.get("mode", "r"))
+        if path.name == "stdout.bin" and "r" in mode and "b" in mode:
+            return BoundedReader(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", reject_unbounded_stdout_read)
+    output_bytes = process_module._MAX_OUTPUT_BYTES + 8_192
+
+    outcome = process_module.run_bounded_command(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'x' * %d); sys.stdout.flush()" % output_bytes,
+        ],
+        timeout=5.0,
+    )
+
+    assert outcome["success"] is False
+    assert outcome["reason"] == "probe_output_limit"
+    assert outcome["truncated"] is True
+    assert outcome["stdout"] == ""
+    assert read_sizes == [process_module._MAX_OUTPUT_BYTES + 1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows launch cleanup deadline")
+def test_windows_launch_failure_reap_uses_only_remaining_caller_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    wait_timeouts = []
+
+    class FakeProcess:
+        pid = 42_424
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def wait(self, *, timeout):
+            wait_timeouts.append(timeout)
+            return 1
+
+    class FakeOwner:
+        def assign(self, process) -> None:
+            assert process.pid == FakeProcess.pid
+
+        def terminate(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    def delayed_resume(_process) -> None:
+        time.sleep(0.05)
+        raise OSError("synthetic resume failure")
+
+    monkeypatch.setattr(process_module, "_WindowsProcessTreeOwner", FakeOwner)
+    monkeypatch.setattr(process_module.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(process_module, "_resume_windows_process", delayed_resume)
+    deadline = time.monotonic() + 0.01
+
+    with pytest.raises(OSError, match="synthetic resume failure"):
+        process_module._start_owned_process(
+            [sys.executable, "-I", "-S", "-c", "pass"],
+            env=None,
+            cwd=None,
+            deadline=deadline,
+        )
+
+    assert wait_timeouts
+    assert 0 <= wait_timeouts[0] <= 0.01
 
 
 def test_probe_expired_temp_setup_does_not_start_a_process(
@@ -805,8 +995,8 @@ def test_probe_process_accounting_error_is_stable_and_redacted(
 
     original_start = process_module._start_owned_process
 
-    def unobservable_owner(command, *, env, cwd):
-        process, owner = original_start(command, env=env, cwd=cwd)
+    def unobservable_owner(command, *, env, cwd, deadline):
+        process, owner = original_start(command, env=env, cwd=cwd, deadline=deadline)
 
         def fail_accounting(_timeout):
             raise OSError("private/operator/process-accounting")
@@ -926,6 +1116,7 @@ def test_posix_wait_empty_fails_closed_while_owned_group_has_a_live_member() -> 
         [sys.executable, "-I", "-S", "-c", "import time; time.sleep(60)"],
         env=None,
         cwd=None,
+        deadline=time.monotonic() + 3.0,
     )
     try:
         assert owner.wait_empty(0.05) is False
@@ -943,6 +1134,7 @@ def test_posix_wait_empty_treats_an_unreaped_zombie_as_non_live() -> None:
         [sys.executable, "-I", "-S", "-c", "pass"],
         env=None,
         cwd=None,
+        deadline=time.monotonic() + 3.0,
     )
     try:
         time.sleep(0.1)
@@ -962,6 +1154,7 @@ def test_posix_wait_empty_fails_closed_when_process_accounting_is_unavailable(
         [sys.executable, "-I", "-S", "-c", "import time; time.sleep(60)"],
         env=None,
         cwd=None,
+        deadline=time.monotonic() + 3.0,
     )
     try:
         monkeypatch.setattr(
@@ -986,6 +1179,7 @@ def test_posix_terminate_never_signals_a_changed_session_identity(
         [sys.executable, "-I", "-S", "-c", "import time; time.sleep(60)"],
         env=None,
         cwd=None,
+        deadline=time.monotonic() + 3.0,
     )
     signalled: list[tuple[int, int]] = []
     try:

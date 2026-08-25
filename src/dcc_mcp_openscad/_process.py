@@ -341,7 +341,11 @@ def _resume_windows_process(process: subprocess.Popen) -> None:
 
 
 def _start_owned_process(
-    command: Sequence[str], *, env: Optional[Mapping[str, str]], cwd: Optional[Path]
+    command: Sequence[str],
+    *,
+    env: Optional[Mapping[str, str]],
+    cwd: Optional[Path],
+    deadline: float,
 ) -> Tuple[subprocess.Popen, _ProcessTreeOwner]:
     kwargs: Dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
@@ -374,7 +378,7 @@ def _start_owned_process(
                     process.kill()
             if process is not None:
                 try:
-                    process.wait(timeout=3.0)
+                    process.wait(timeout=max(0.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     pass
             owner.close()
@@ -435,6 +439,26 @@ def _remove_probe_directory(root: Path, deadline: float) -> bool:
             time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
 
 
+def _read_bounded_output(path: Path, deadline: float) -> Tuple[bytes, bool, bool]:
+    """Read at most the public limit plus one byte under the caller deadline."""
+    if time.monotonic() >= deadline:
+        return b"", True, False
+    try:
+        if not path.is_file():
+            return b"", True, time.monotonic() < deadline
+        if time.monotonic() >= deadline:
+            return b"", True, False
+        with path.open("rb") as stream:
+            if time.monotonic() >= deadline:
+                return b"", True, False
+            value = stream.read(_MAX_OUTPUT_BYTES + 1)
+    except OSError:
+        return b"", False, time.monotonic() < deadline
+    if time.monotonic() >= deadline:
+        return b"", True, False
+    return value, True, True
+
+
 def run_bounded_command(
     command: Sequence[str],
     *,
@@ -476,7 +500,12 @@ def run_bounded_command(
     pending_exception = None
     try:
         if time.monotonic() < work_deadline:
-            process, owner = _start_owned_process(supervisor, env=env, cwd=cwd or root)
+            process, owner = _start_owned_process(
+                supervisor,
+                env=env,
+                cwd=cwd or root,
+                deadline=deadline,
+            )
             while time.monotonic() < work_deadline:
                 check_dcc_cancelled()
                 try:
@@ -508,25 +537,25 @@ def run_bounded_command(
         if process is not None and owner is not None:
             cleanup_ok = _cleanup_owned_process(process, owner, deadline)
 
-    try:
-        if time.monotonic() >= deadline:
-            stdout = b""
-            stderr = b""
-        else:
-            stdout = stdout_path.read_bytes() if stdout_path.is_file() else b""
-            stderr = stderr_path.read_bytes() if stderr_path.is_file() else b""
-    except OSError:
-        stdout = b""
-        stderr = b""
+    stdout, stdout_ok, stdout_in_budget = _read_bounded_output(stdout_path, deadline)
+    if stdout_in_budget:
+        stderr, stderr_ok, stderr_in_budget = _read_bounded_output(stderr_path, deadline)
+    else:
+        stderr, stderr_ok, stderr_in_budget = b"", True, False
+    if not stdout_ok or not stderr_ok:
         cleanup_ok = False
     truncated = len(stdout) > _MAX_OUTPUT_BYTES or len(stderr) > _MAX_OUTPUT_BYTES
     cleanup_ok = _remove_probe_directory(root, deadline) and cleanup_ok
+    deadline_expired = not stdout_in_budget or not stderr_in_budget or time.monotonic() >= deadline
     if pending_exception is not None:
         if not cleanup_ok:
             raise ProcessCleanupError("owned OpenSCAD process cleanup failed") from None
         raise pending_exception
     if not cleanup_ok:
         reason = "probe_cleanup_failed"
+        record = None
+    elif deadline_expired:
+        reason = "probe_timeout"
         record = None
     if record is None:
         return {
