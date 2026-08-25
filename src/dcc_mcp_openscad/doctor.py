@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 import math
 import os
@@ -17,6 +16,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, Mapping, Optional
+
+try:
+    from importlib import metadata as importlib_metadata
+except ImportError:  # pragma: no cover - exercised by native Python 3.7 CI
+    import importlib_metadata
 
 import dcc_mcp_core
 from dcc_mcp_core.deployment import (
@@ -302,7 +306,7 @@ def _capture_runtime(executable: Path, deadline: float) -> Dict[str, Any]:
     }
 
 
-def _distribution_root(distribution: importlib.metadata.Distribution) -> Path:
+def _distribution_root(distribution: importlib_metadata.Distribution) -> Path:
     root = Path(distribution.locate_file("")).resolve(strict=True)
     if not root.is_dir():
         raise LifecycleFailure(EXIT_PREFLIGHT, "core", "core_distribution_invalid")
@@ -311,12 +315,12 @@ def _distribution_root(distribution: importlib.metadata.Distribution) -> Path:
 
 def _capture_core_identity() -> Dict[str, Any]:
     try:
-        distribution = importlib.metadata.distribution("dcc-mcp-core")
+        distribution = importlib_metadata.distribution("dcc-mcp-core")
         version = distribution.version
         root = _distribution_root(distribution)
         module = Path(str(dcc_mcp_core.__file__)).resolve(strict=True)
         module.relative_to(root)
-    except (ImportError, importlib.metadata.PackageNotFoundError, OSError, ValueError) as exc:
+    except (ImportError, importlib_metadata.PackageNotFoundError, OSError, ValueError) as exc:
         raise LifecycleFailure(EXIT_PREFLIGHT, "core", "core_distribution_invalid") from exc
     if _version_tuple(version) < _version_tuple(MINIMUM_CORE_VERSION):
         raise LifecycleFailure(EXIT_PREFLIGHT, "core", "core_version_unsupported")
@@ -618,8 +622,8 @@ def _base_result(request: DoctorRequest, core_version: str) -> Dict[str, Any]:
 
 def _failure_result(request: DoctorRequest, failure: LifecycleFailure) -> Dict[str, Any]:
     try:
-        core_version = importlib.metadata.version("dcc-mcp-core")
-    except importlib.metadata.PackageNotFoundError:
+        core_version = importlib_metadata.version("dcc-mcp-core")
+    except importlib_metadata.PackageNotFoundError:
         core_version = "unavailable"
     result = _base_result(request, core_version)
     result.update({"status": "failed", "exit_code": failure.exit_code})

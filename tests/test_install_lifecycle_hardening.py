@@ -70,7 +70,9 @@ def test_uses_only_the_official_core_02014_install_contract() -> None:
         {"doctor", "install", "status", "verify", "uninstall", "upgrade"}
     )
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    assert 'dependencies=["dcc-mcp-core>=0.20.14,<1.0.0"]' in pyproject.read_text(encoding="utf-8")
+    project = pyproject.read_text(encoding="utf-8")
+    assert '"dcc-mcp-core>=0.20.14,<1.0.0"' in project
+    assert "\"importlib-metadata>=4.13,<7; python_version<'3.8'\"" in project
 
 
 def test_core_identity_binds_the_resolved_managed_python_entrypoint(
