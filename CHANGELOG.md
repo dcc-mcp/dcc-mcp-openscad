@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.1](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.2.0...v0.2.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* bind probe output file identity ([61e7034](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/61e703412ef9f8d78b344edb2b3d28993a549e82))
+* close probe process cleanup races ([37928c0](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/37928c09a1002a5091657baa8101654ea2813163))
+* enforce probe deadline boundaries ([824df04](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/824df0437b5ed884c15195af4268a9a789f62fc8))
+* harden probe ownership deadline ([e7955dc](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/e7955dc6a394068ce9446e691700233febfc7112))
+
 ## [0.2.0](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.1.2...v0.2.0) (2026-08-25)
 
 
