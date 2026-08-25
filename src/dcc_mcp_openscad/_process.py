@@ -362,6 +362,7 @@ def _start_owned_process(
     if os.name == "nt":
         owner = _WindowsProcessTreeOwner()
         process = None
+        assigned_to_job = False
         try:
             process = subprocess.Popen(
                 list(command),
@@ -369,14 +370,21 @@ def _start_owned_process(
                 **kwargs,
             )
             owner.assign(process)
+            assigned_to_job = True
             _resume_windows_process(process)
             return process, owner
         except BaseException:
-            try:
-                owner.terminate()
-            except OSError:
-                if process is not None and process.poll() is None:
+            if assigned_to_job:
+                try:
+                    owner.terminate()
+                except OSError:
+                    if process is not None and process.poll() is None:
+                        process.kill()
+            elif process is not None and process.poll() is None:
+                try:
                     process.kill()
+                except OSError:
+                    pass
             if process is not None:
                 try:
                     process.wait(timeout=max(0.0, deadline - time.monotonic()))
@@ -692,6 +700,7 @@ def run_bounded_command(
         str(stderr_path),
         repr(work_deadline),
         repr(deadline),
+        str(os.getpid()),
         "--",
         *[str(part) for part in command],
     ]
