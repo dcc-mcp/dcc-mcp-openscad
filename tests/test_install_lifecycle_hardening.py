@@ -650,6 +650,57 @@ def test_probe_root_first_exit_reaps_descendant_with_inherited_output_handles(
     assert not _pid_alive(descendant_pid)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX terminal-record cleanup")
+def test_probe_status_write_failure_reaps_a_ready_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    identities = tmp_path / "status-failure-identities.txt"
+    ready = tmp_path / "status-failure-ready.txt"
+    descendant = (
+        "import os,pathlib,time; "
+        f"pathlib.Path({ready.as_posix()!r}).write_text(str(os.getpid()), encoding='utf-8'); "
+        "time.sleep(60)"
+    )
+    root = (
+        "import os,pathlib,subprocess,sys,time; "
+        f"child=subprocess.Popen([sys.executable,'-c',{descendant!r}]); "
+        f"pathlib.Path({identities.as_posix()!r}).write_text("
+        "str(os.getpid())+' '+str(child.pid), encoding='utf-8'); "
+        "deadline=time.monotonic()+3; "
+        f'exec("while not pathlib.Path({ready.as_posix()!r}).is_file() '
+        'and time.monotonic()<deadline: time.sleep(0.01)")'
+    )
+    original_start = process_module._start_owned_process
+
+    def fail_terminal_status(command, *, env, cwd, deadline):
+        Path(command[4]).with_suffix(".tmp").mkdir()
+        return original_start(command, env=env, cwd=cwd, deadline=deadline)
+
+    monkeypatch.setattr(process_module, "_start_owned_process", fail_terminal_status)
+    owned_pids: tuple[int, int] | None = None
+    try:
+        outcome = process_module.run_bounded_command([sys.executable, "-c", root], timeout=3.0)
+
+        assert ready.is_file()
+        owned_pids = tuple(int(value) for value in identities.read_text(encoding="utf-8").split())
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and any(_pid_alive(pid) for pid in owned_pids):
+            time.sleep(0.02)
+        assert outcome["success"] is False
+        assert outcome["reason"] == "probe_timeout"
+        assert not any(_pid_alive(pid) for pid in owned_pids)
+    finally:
+        if owned_pids is not None:
+            for pid in owned_pids:
+                if _pid_alive(pid):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+
+
 def test_probe_cancellation_cleans_tree_and_private_directory_before_reraising(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -753,6 +804,7 @@ def test_probe_supervisor_expired_deadline_has_zero_launch_or_output_side_effect
             str(stderr),
             repr(expired),
             repr(expired),
+            str(os.getppid()),
             "--",
             sys.executable,
             "-c",
@@ -766,6 +818,92 @@ def test_probe_supervisor_expired_deadline_has_zero_launch_or_output_side_effect
     assert not status.exists()
     assert not stdout.exists()
     assert not stderr.exists()
+
+
+def test_probe_supervisor_refuses_an_adopted_controller_before_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._probe_supervisor as supervisor
+
+    status = tmp_path / "status.json"
+    stdout = tmp_path / "stdout.bin"
+    stderr = tmp_path / "stderr.bin"
+    marker = tmp_path / "child-launched.txt"
+
+    def unexpected_launch(*_args, **_kwargs):
+        marker.write_text("launched", encoding="utf-8")
+        raise AssertionError("an adopted supervisor must not launch a child")
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", unexpected_launch)
+    expected_controller_pid = 42_424
+    monkeypatch.setattr(supervisor, "_IS_POSIX", True)
+    monkeypatch.setattr(supervisor.os, "getppid", lambda: expected_controller_pid + 1)
+    deadline = time.monotonic() + 1.0
+
+    exit_code = supervisor.main(
+        [
+            str(status),
+            str(stdout),
+            str(stderr),
+            repr(deadline),
+            repr(deadline),
+            str(expected_controller_pid),
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(99)",
+        ]
+    )
+
+    assert exit_code == 70
+    assert not marker.exists()
+    assert not status.exists()
+    assert not stdout.exists()
+    assert not stderr.exists()
+
+
+def test_probe_supervisor_rechecks_controller_identity_at_the_launch_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dcc_mcp_openscad._probe_supervisor as supervisor
+
+    marker = tmp_path / "child-launched.txt"
+    expected_controller_pid = 42_424
+    parent_checks = 0
+
+    def controller_parent() -> int:
+        nonlocal parent_checks
+        parent_checks += 1
+        return expected_controller_pid if parent_checks == 1 else expected_controller_pid + 1
+
+    def unexpected_launch(*_args, **_kwargs):
+        marker.write_text("launched", encoding="utf-8")
+        raise AssertionError("a supervisor with a dead controller must not launch")
+
+    monkeypatch.setattr(supervisor, "_IS_POSIX", True)
+    monkeypatch.setattr(supervisor.os, "getppid", controller_parent)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", unexpected_launch)
+    monkeypatch.setattr(supervisor, "_fail_closed", lambda *_args: 70)
+    deadline = time.monotonic() + 1.0
+
+    exit_code = supervisor.main(
+        [
+            str(tmp_path / "status.json"),
+            str(tmp_path / "stdout.bin"),
+            str(tmp_path / "stderr.bin"),
+            repr(deadline),
+            repr(deadline),
+            str(expected_controller_pid),
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(99)",
+        ]
+    )
+
+    assert exit_code == 70
+    assert parent_checks >= 2
+    assert not marker.exists()
 
 
 def test_probe_delayed_launch_cannot_receive_a_second_timeout_budget(
@@ -1143,6 +1281,112 @@ def test_read_bounded_output_enforces_limit_plus_one_identity_bound(
         True,
         True,
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows launch cleanup deadline")
+def test_windows_job_assignment_failure_terminates_and_reaps_suspended_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    class FakeProcess:
+        pid = 42_424
+
+        def __init__(self) -> None:
+            self.kill_calls = 0
+            self.wait_timeouts: list[float] = []
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.kill_calls += 1
+
+        def wait(self, *, timeout):
+            self.wait_timeouts.append(timeout)
+            return 1
+
+    class FakeOwner:
+        def assign(self, process) -> None:
+            assert process is fake_process
+            raise OSError("synthetic assignment failure")
+
+        def terminate(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    fake_process = FakeProcess()
+    monkeypatch.setattr(process_module, "_WindowsProcessTreeOwner", FakeOwner)
+    monkeypatch.setattr(
+        process_module.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: fake_process,
+    )
+    monkeypatch.setattr(
+        process_module,
+        "_resume_windows_process",
+        lambda _process: (_ for _ in ()).throw(AssertionError("process must remain suspended")),
+    )
+    started_at = time.monotonic()
+    deadline = started_at + 0.1
+
+    with pytest.raises(OSError, match="synthetic assignment failure"):
+        process_module._start_owned_process(
+            [sys.executable, "-I", "-S", "-c", "pass"],
+            env=None,
+            cwd=None,
+            deadline=deadline,
+        )
+
+    assert fake_process.kill_calls == 1
+    assert fake_process.wait_timeouts
+    assert 0 <= fake_process.wait_timeouts[0] <= deadline - started_at
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows suspended-process cleanup")
+def test_windows_job_assignment_failure_leaves_no_real_suspended_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dcc_mcp_openscad._process as process_module
+
+    class RejectingOwner:
+        def assign(self, _process) -> None:
+            raise OSError("synthetic assignment failure")
+
+        def terminate(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    original_popen = process_module.subprocess.Popen
+    captured_process = None
+
+    def capture_process(*args, **kwargs):
+        nonlocal captured_process
+        captured_process = original_popen(*args, **kwargs)
+        return captured_process
+
+    monkeypatch.setattr(process_module, "_WindowsProcessTreeOwner", RejectingOwner)
+    monkeypatch.setattr(process_module.subprocess, "Popen", capture_process)
+    try:
+        with pytest.raises(OSError, match="synthetic assignment failure"):
+            process_module._start_owned_process(
+                [sys.executable, "-I", "-S", "-c", "import time; time.sleep(60)"],
+                env=None,
+                cwd=None,
+                deadline=time.monotonic() + 1.0,
+            )
+
+        assert captured_process is not None
+        assert captured_process.poll() is not None
+        assert not _pid_alive(captured_process.pid)
+    finally:
+        if captured_process is not None and captured_process.poll() is None:
+            captured_process.kill()
+            captured_process.wait(timeout=3)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows launch cleanup deadline")
