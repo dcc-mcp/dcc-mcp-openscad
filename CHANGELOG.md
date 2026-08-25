@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.1.2...v0.2.0) (2026-08-25)
+
+
+### Features
+
+* add OpenSCAD runtime doctor ([c060b40](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/c060b407bc4e8873bfee34df3e4693032a53d178))
+
+
+### Bug Fixes
+
+* harden OpenSCAD install lifecycle ([7c16d8c](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/7c16d8ce3a210705d63ca8eea5efac93a019b6a7))
+* resolve managed Python entrypoint ([18dace5](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/18dace54518d4dd774778b264fd78ef2da1a0cd1))
+* support Python 3.7 metadata ([5cd747e](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/5cd747e58b2968f42c5437a788ffe373583c66a3))
+
 ## [0.1.2](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.1.1...v0.1.2) (2026-08-12)
 
 
