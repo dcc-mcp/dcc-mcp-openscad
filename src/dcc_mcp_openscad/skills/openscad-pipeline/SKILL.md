@@ -11,7 +11,7 @@ metadata:
   dcc-mcp:
     dcc: openscad
     layer: domain
-    version: "0.2.0"  # x-release-please-version
+    version: "0.2.1"  # x-release-please-version
     tags: [openscad, cad, parametric-modeling, pipeline]
     search-hint: >-
       OpenSCAD status capabilities inspect SCAD modules dependencies validate
