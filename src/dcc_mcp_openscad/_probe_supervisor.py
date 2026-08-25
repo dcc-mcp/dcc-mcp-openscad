@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -17,15 +19,47 @@ def _write_status(path: Path, payload: dict) -> None:
     os.replace(str(temporary), str(path))
 
 
+def _terminate_posix_group(child: Optional[subprocess.Popen], kill_deadline: float) -> int:
+    leader_pid = os.getpid()
+    if os.getpgrp() != leader_pid or os.getsid(0) != leader_pid:
+        return 71
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    try:
+        os.killpg(leader_pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return 70
+    while time.monotonic() < kill_deadline:
+        if child is not None:
+            child.poll()
+        time.sleep(0.01)
+    try:
+        os.killpg(leader_pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return 70
+    return 70
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if len(arguments) < 5 or arguments[3] != "--":
+    if len(arguments) < 7 or arguments[5] != "--":
         return 64
     status_path = Path(arguments[0])
     stdout_path = Path(arguments[1])
     stderr_path = Path(arguments[2])
-    command = arguments[4:]
+    try:
+        work_deadline = float(arguments[3])
+        final_deadline = float(arguments[4])
+    except ValueError:
+        return 64
+    if (
+        not math.isfinite(work_deadline)
+        or not math.isfinite(final_deadline)
+        or work_deadline > final_deadline
+    ):
+        return 64
+    command = arguments[6:]
     parent_pid = os.getppid()
+    child = None
     with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
         try:
             child = subprocess.Popen(
@@ -41,6 +75,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                 {"state": "launch_failed", "error_type": exc.__class__.__name__},
             )
         else:
+            while child.poll() is None:
+                if os.getppid() != parent_pid:
+                    if os.name == "posix":
+                        return _terminate_posix_group(
+                            child, min(final_deadline, time.monotonic() + 0.2)
+                        )
+                    child.kill()
+                    child.wait()
+                    return 70
+                if time.monotonic() >= work_deadline:
+                    if os.name == "posix":
+                        return _terminate_posix_group(child, final_deadline)
+                    child.kill()
+                    child.wait()
+                    return 72
+                time.sleep(0.02)
             returncode = child.wait()
             stdout_file.flush()
             stderr_file.flush()
@@ -49,13 +99,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Retain the session/process-group leader until the owner has consumed the
     # terminal record and killed the whole owned tree. This prevents signaling
     # a recycled numeric process group after the probed root exits first.
-    deadline = time.monotonic() + 60.0
+    deadline = min(final_deadline, time.monotonic() + 60.0)
     while time.monotonic() < deadline:
         if os.getppid() != parent_pid:
             if os.name == "posix":
-                os.killpg(os.getpgrp(), 9)
+                return _terminate_posix_group(child, min(final_deadline, time.monotonic() + 0.2))
             return 70
         time.sleep(0.05)
+    if os.name == "posix":
+        return _terminate_posix_group(child, final_deadline)
     return 0
 
 
