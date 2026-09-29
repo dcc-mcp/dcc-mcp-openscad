@@ -121,6 +121,7 @@ class LifecycleFailure(RuntimeError):
         reason: str,
         error_code: Optional[str] = None,
         detail: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(reason)
         self.exit_code = int(exit_code)
@@ -130,6 +131,9 @@ class LifecycleFailure(RuntimeError):
         # plus the sentence a human or agent is meant to act on.
         self.error_code = error_code
         self.detail = detail
+        # Evidence observed before the refusal, so a rejected host is still
+        # reported with the version that was found instead of only a code.
+        self.context = context
 
 
 @dataclass(frozen=True)
@@ -362,6 +366,13 @@ def _capture_runtime(executable: Path, deadline: float) -> Dict[str, Any]:
             "host_version_unsupported",
             error_code=_host_error_code(verdict["status"]),
             detail=unsupported_reason(verdict),
+            context={
+                "runtime": {
+                    "product": "OpenSCAD",
+                    "version": version,
+                    "host_matrix": verdict,
+                }
+            },
         )
     help_result = _run_probe(
         [before["path"], "--help"],
@@ -704,6 +715,10 @@ def _failure_result(request: DoctorRequest, failure: LifecycleFailure) -> Dict[s
     result.update({"status": "failed", "exit_code": failure.exit_code})
     result["verify"].update({"failure_stage": failure.stage, "failure_reason": failure.reason})
     result["steps"] = [_step(failure.stage, "failed", "The lifecycle operation failed closed.")]
+    if failure.context:
+        # A refusal must still say which host was found and why: an error code
+        # alone leaves the caller to guess what to install.
+        result.update(failure.context)
     if failure.error_code:
         result["error_code"] = failure.error_code
         result["steps"].append(_step("host_matrix", "failed", failure.detail or failure.reason))

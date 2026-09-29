@@ -30,8 +30,16 @@ if sha_matches; then
 else
   echo "::group::Download ${asset}"
   rm -f "${asset}"
-  curl -fsSL --retry 3 -o "${asset}" "${url}"
-  curl -fsSL --retry 3 -o "${sha_asset}" "${url}.sha256"
+  if ! curl -fsSL --retry 3 -o "${asset}" "${url}"; then
+    echo "::endgroup::"
+    echo "::error::cannot download ${url}: the pinned asset may have rotated out" >&2
+    exit 1
+  fi
+  if ! curl -fsSL --retry 3 -o "${sha_asset}" "${url}.sha256"; then
+    echo "::endgroup::"
+    echo "::error::cannot download ${url}.sha256: refusing to verify against a missing digest" >&2
+    exit 1
+  fi
   echo "::endgroup::"
   if ! sha_matches; then
     echo "::error::SHA256 mismatch for ${asset}"
@@ -113,5 +121,11 @@ for candidate in "${candidates[@]}"; do
   exit 0
 done
 
-echo "::error::No candidate could run OpenSCAD ${version}"
+cat >&2 <<EOF
+::error::No candidate could run OpenSCAD ${version}
+If the download itself failed with 404, the pinned asset has rotated out of
+${base_url}. Re-pin it: list the assets still published there, pick a build,
+and update the openscad-real matrix entry in .github/workflows/ci.yml plus the
+supported range it evidences in src/dcc_mcp_openscad/compat_matrix.json.
+EOF
 exit 1

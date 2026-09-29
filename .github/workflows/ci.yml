@@ -112,6 +112,45 @@ jobs:
           path: openscad-real-${{ matrix.openscad_version }}.xml
           retention-days: 7
 
+  # The mirror of the job above: a supported host working means nothing if an
+  # out-of-matrix host is silently accepted too. This pins the 2019.05 release,
+  # which -- unlike a dated snapshot -- is a permanent URL, so this evidence
+  # cannot rot out from under the gate.
+  openscad-old-host:
+    name: Refuse unsupported OpenSCAD 2019.05
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - name: Install a virtual display and GL libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libegl1 libgl1 libglvnd0 libopengl0 libglx-mesa0 libgl1-mesa-dri \
+            libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libfreetype6 libxi6 libxrender1
+      - name: Cache OpenSCAD AppImage
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.temp }}/openscad-2019.05/*.AppImage
+            ${{ runner.temp }}/openscad-2019.05/*.AppImage.sha256
+          key: openscad-appimage-${{ runner.os }}-OpenSCAD-2019.05-x86_64.AppImage
+      - name: Install OpenSCAD 2019.05
+        env:
+          OPENSCAD_VERSION: "2019.05"
+          OPENSCAD_ASSET: OpenSCAD-2019.05-x86_64.AppImage
+          OPENSCAD_BASE_URL: https://files.openscad.org
+        run: bash .github/scripts/install-openscad.sh
+      - name: Assert the out-of-matrix host is refused
+        run: |
+          echo "OpenSCAD ${OPENSCAD_REAL_VERSION} via ${OPENSCAD_TEST_EXECUTABLE}"
+          python3 .github/scripts/assert-unsupported-host.py "${OPENSCAD_TEST_EXECUTABLE}"
+
   lint-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 15

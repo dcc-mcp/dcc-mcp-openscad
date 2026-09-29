@@ -142,10 +142,14 @@ def test_doctor_enforces_openscad_version_floor(
     assert result["verify"]["failure_reason"] == "host_version_unsupported"
 
 
-def test_doctor_rejects_a_host_outside_the_matrix_with_a_machine_readable_code(
+def test_doctor_rejects_a_host_outside_the_matrix_and_still_reports_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    """Between the two verified lanes the host is unverified, not tolerated."""
+    """Between the two verified lanes the host is unverified, not tolerated.
+
+    A refusal that only carries an error code leaves the caller guessing which
+    host was found, so the discovered version and verdict travel with it.
+    """
     from dcc_mcp_openscad import server
 
     executable = _fake_runtime(tmp_path, monkeypatch, version="2024.01.15")
@@ -156,6 +160,11 @@ def test_doctor_rejects_a_host_outside_the_matrix_with_a_machine_readable_code(
     assert exit_code == 10
     assert result["error_code"] == "openscad_host_version_unlisted"
     assert result["verify"]["failure_stage"] == "host_version"
+
+    host_matrix = result["runtime"]["host_matrix"]
+    assert host_matrix["version"] == "2024.01.15"
+    assert host_matrix["status"] == "unlisted"
+    assert result["verify"]["directly_usable"] is False
     assert "2024.01.15" in " ".join(step["description"] for step in result["steps"])
 
 

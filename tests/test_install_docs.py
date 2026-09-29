@@ -80,6 +80,24 @@ def test_ci_runs_the_real_openscad_case_and_fails_when_it_skips() -> None:
     assert "xvfb-run" in commands
 
 
+def test_ci_also_proves_an_unsupported_host_is_refused_on_a_real_binary() -> None:
+    """A supported host working means nothing if an old one is tolerated."""
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["openscad-old-host"]
+    commands = " ".join(str(step.get("run") or "") for step in job["steps"])
+
+    assert "install-openscad.sh" in commands
+    assert "assert-unsupported-host.py" in commands
+    # Pinned to a permanent release URL, not a dated snapshot that can rotate.
+    pinned = " ".join(
+        str(value) for step in job["steps"] for value in (step.get("env") or {}).values()
+    )
+    assert "OpenSCAD-2019.05-x86_64.AppImage" in pinned
+    assert "https://files.openscad.org/snapshots" not in pinned
+
+
 def test_install_guide_documents_the_supported_matrix() -> None:
     guide = (ROOT / "install.md").read_text(encoding="utf-8")
 
