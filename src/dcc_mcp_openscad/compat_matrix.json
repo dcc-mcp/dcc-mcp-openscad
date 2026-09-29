@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "host": "openscad",
+  "matrix_version": "2026-09-30",
+  "notes": "Single source of truth for OpenSCAD host support. Read by dcc_mcp_openscad.compat (service side) and by doctor.py (lifecycle side). OpenSCAD version strings are calendar based: YYYY.MM for releases and YYYY.MM.DD for the dated development snapshots the project publishes between releases. A version outside `supported_ranges` is rejected explicitly; it is never silently downgraded.",
+  "executable_names": [
+    "openscad.com",
+    "openscad",
+    "openscad.exe"
+  ],
+  "version_scheme": "YYYY.MM[.DD]",
+  "supported_ranges": [
+    {
+      "id": "2021.01.x",
+      "min_version": "2021.01.0",
+      "max_version": "2021.01.9999",
+      "status": "supported",
+      "evidence": "Real OpenSCAD 2021.01 end-to-end run in CI: status/validate/export STL/render PNG all executed, 1 passed / 0 skipped.",
+      "ci_matrix_entry": "OpenSCAD-2021.01-x86_64.AppImage"
+    },
+    {
+      "id": "2026.09.x",
+      "min_version": "2026.09.0",
+      "max_version": "2026.09.9999",
+      "status": "supported",
+      "evidence": "Real OpenSCAD 2026.09.29 snapshot end-to-end run in CI: same end-to-end path, 1 passed / 0 skipped. No adapter-visible break; the CLI flags the adapter passes are a strict superset of the 2021.01 surface.",
+      "ci_matrix_entry": "OpenSCAD-2026.09.29-x86_64.AppImage"
+    }
+  ],
+  "breaking_changes": [
+    {
+      "id": "export-format-flag-added",
+      "title": "`--export-format` became available for STL/3MF/AMF/OFF selection",
+      "changed_in": "2021.01",
+      "applies_from": "2021.01",
+      "kind": "added",
+      "removed_symbol": null,
+      "replacement": "--export-format binstl|asciistl",
+      "probe": {
+        "flag": "--export-format",
+        "expected_on_or_after_changed_in": "present",
+        "expected_before_changed_in": "unverified"
+      },
+      "symptom": "Without the flag OpenSCAD infers the format from the output suffix; an unknown suffix silently produces no file instead of an error.",
+      "adapter_usage": "guarded",
+      "enforcement": "postcondition",
+      "remediation": "The adapter passes `--export-format binstl|asciistl` for STL outputs and then reads the artifact back, so a missing or empty file is an explicit error instead of a reported success."
+    },
+    {
+      "id": "summary-file-flag-added",
+      "title": "`--summary-file` was added for machine-readable CGAL statistics",
+      "changed_in": "2026.09",
+      "applies_from": "2026.09",
+      "kind": "added",
+      "removed_symbol": null,
+      "replacement": "--summary-file <path>",
+      "probe": {
+        "flag": "--summary-file",
+        "expected_on_or_after_changed_in": "present",
+        "expected_before_changed_in": "absent"
+      },
+      "symptom": "Statistics are only printed to stdout on older hosts; parsing stdout for facet counts silently fails there.",
+      "adapter_usage": "unused",
+      "enforcement": "guard",
+      "remediation": "The adapter never parses the statistics stream; it reads the exported artifact back instead, which is version independent."
+    },
+    {
+      "id": "geometry-summary-line-changed",
+      "title": "The stdout geometry summary gained a `(PolySet)` qualifier",
+      "changed_in": "2026.09",
+      "applies_from": "2026.09",
+      "kind": "diagnostic",
+      "removed_symbol": null,
+      "replacement": null,
+      "probe": {
+        "flag": null,
+        "expected_on_or_after_changed_in": "unverified"
+      },
+      "symptom": "2021.01 prints `Top level object is a 3D object:` where 2026.09 prints `Top level object is a 3D object (PolySet):`; any stdout scraping keyed on the old line breaks.",
+      "adapter_usage": "unused",
+      "enforcement": "info",
+      "remediation": "Nothing to do: the adapter reads artifacts back from disk rather than parsing OpenSCAD's stdout."
+    }
+  ]
+}

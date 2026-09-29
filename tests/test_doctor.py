@@ -17,7 +17,7 @@ def _validate(payload: dict) -> None:
 def _fake_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    version: str = "2024.01.15",
+    version: str = "2026.09.29",
 ) -> Path:
     import dcc_mcp_openscad.doctor as lifecycle
 
@@ -63,7 +63,9 @@ def test_doctor_cli_reports_missing_openscad_as_stable_json(tmp_path: Path, caps
         "failure_stage": "identity",
         "failure_reason": "file_missing",
     }
-    assert result["core_version"] >= "0.20.14"
+    from dcc_mcp_openscad.doctor import MINIMUM_CORE_VERSION
+
+    assert result["core_version"] >= MINIMUM_CORE_VERSION
     assert result["receipt_path"] == "configured"
     assert str(private_path) not in captured.out
 
@@ -92,11 +94,19 @@ def test_doctor_reports_exact_version_capabilities_and_identity(
     assert exit_code == 0
     assert result["verify"]["directly_usable"] is True
     assert result["runtime"]["product"] == "OpenSCAD"
-    assert result["runtime"]["version"] == "2024.01.15"
+    assert result["runtime"]["version"] == "2026.09.29"
     assert result["runtime"]["capabilities"]["--hardwarnings"] is True
     assert result["runtime"]["capabilities"]["--render"] is True
     assert len(result["runtime"]["sha256"]) == 64
     assert str(executable) not in captured.out
+
+    # The report states the host that was actually found and whether the
+    # compatibility matrix covers it, so a caller can gate on `status`.
+    host_matrix = result["runtime"]["host_matrix"]
+    assert host_matrix["version"] == "2026.09.29"
+    assert host_matrix["status"] == "supported"
+    assert host_matrix["range"]["id"] == "2026.09.x"
+    assert "2021.01.x" in host_matrix["supported_ranges"]
 
 
 def test_doctor_enforces_current_core_floor(
@@ -130,6 +140,37 @@ def test_doctor_enforces_openscad_version_floor(
     assert exit_code == 10
     assert result["verify"]["failure_stage"] == "host_version"
     assert result["verify"]["failure_reason"] == "host_version_unsupported"
+
+
+def test_doctor_rejects_a_host_outside_the_matrix_with_a_machine_readable_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """Between the two verified lanes the host is unverified, not tolerated."""
+    from dcc_mcp_openscad import server
+
+    executable = _fake_runtime(tmp_path, monkeypatch, version="2024.01.15")
+    exit_code = server.main(["doctor", "--executable", str(executable), "--json"])
+
+    result = json.loads(capsys.readouterr().out)
+    _validate(result)
+    assert exit_code == 10
+    assert result["error_code"] == "openscad_host_version_unlisted"
+    assert result["verify"]["failure_stage"] == "host_version"
+    assert "2024.01.15" in " ".join(step["description"] for step in result["steps"])
+
+
+def test_doctor_rejects_a_host_newer_than_the_matrix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    from dcc_mcp_openscad import server
+
+    executable = _fake_runtime(tmp_path, monkeypatch, version="2099.01.01")
+    exit_code = server.main(["doctor", "--executable", str(executable), "--json"])
+
+    result = json.loads(capsys.readouterr().out)
+    _validate(result)
+    assert exit_code == 10
+    assert result["error_code"] == "openscad_host_version_unverified"
 
 
 def test_verify_requires_an_owned_receipt(

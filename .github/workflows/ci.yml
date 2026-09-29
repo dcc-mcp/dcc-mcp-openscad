@@ -42,6 +42,71 @@ jobs:
         run: python -m pytest tests/test_doctor.py -q
       - run: python -m pytest -m "not openscad"
 
+  # Real-hardware coverage: the `-m "not openscad"` contract job above never
+  # exercises OpenSCAD itself, so a CLI break stays invisible until release.
+  # This job installs a pinned official OpenSCAD -- release and snapshot lines
+  # -- and runs the one test that does, then fails if that test was skipped.
+  # PNG rendering needs a GL-capable display, so the run is wrapped in xvfb.
+  openscad-real:
+    name: Real OpenSCAD ${{ matrix.openscad_version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Two host lines, each pinned to an exact asset and its published
+          # SHA256: the 2021.01 release and a dated development snapshot.
+          - os: ubuntu-latest
+            openscad_version: "2021.01"
+            openscad_asset: OpenSCAD-2021.01-x86_64.AppImage
+            openscad_base_url: https://files.openscad.org
+          - os: ubuntu-latest
+            openscad_version: "2026.09.29"
+            openscad_asset: OpenSCAD-2026.09.29-x86_64.AppImage
+            openscad_base_url: https://files.openscad.org/snapshots
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - name: Record resolved dcc-mcp-core
+        run: |
+          python -c "import importlib.metadata as m; print('dcc-mcp-core==%s' % m.version('dcc-mcp-core'))" | tee core-version.txt
+      - name: Cache OpenSCAD AppImage
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.temp }}/openscad-${{ matrix.openscad_version }}/*.AppImage
+            ${{ runner.temp }}/openscad-${{ matrix.openscad_version }}/*.AppImage.sha256
+          key: openscad-appimage-${{ runner.os }}-${{ matrix.openscad_asset }}
+      - name: Install OpenSCAD ${{ matrix.openscad_version }}
+        env:
+          OPENSCAD_VERSION: ${{ matrix.openscad_version }}
+          OPENSCAD_ASSET: ${{ matrix.openscad_asset }}
+          OPENSCAD_BASE_URL: ${{ matrix.openscad_base_url }}
+        run: bash .github/scripts/install-openscad.sh
+      - name: Install a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb
+      - name: Real OpenSCAD end-to-end
+        run: |
+          echo "OpenSCAD ${OPENSCAD_REAL_VERSION} via ${OPENSCAD_TEST_EXECUTABLE}"
+          xvfb-run -a python -m pytest -m openscad -v --junitxml=openscad-real-${{ matrix.openscad_version }}.xml
+      - name: Assert the real test executed
+        if: always()
+        run: python3 .github/scripts/verify-openscad-run.py openscad-real-${{ matrix.openscad_version }}.xml
+      - name: Upload real run report
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: openscad-real-${{ matrix.openscad_version }}
+          path: openscad-real-${{ matrix.openscad_version }}.xml
+          retention-days: 7
+
   lint-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 15

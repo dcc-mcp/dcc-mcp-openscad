@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ._process import ProcessCleanupError, run_bounded_command
+from .compat import classify_host
+from .write_contract import WriteVerificationError, verify_artifact
 
 _PARAMETER_NAME = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 _MODULE = re.compile(r"\bmodule\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(")
@@ -57,6 +59,20 @@ class OpenScadError(RuntimeError):
 
 class OpenScadTimeoutError(OpenScadError):
     """OpenSCAD did not complete before the configured deadline."""
+
+
+class OpenScadWriteVerificationError(OpenScadError):
+    """A mutating tool reported success but the read-back disagreed.
+
+    Subclasses :class:`OpenScadError` so existing callers that already handle
+    adapter failures keep working, and carries the structured
+    :attr:`verification` payload so the caller can branch on the failing check
+    instead of parsing prose.
+    """
+
+    def __init__(self, error: WriteVerificationError):
+        self.verification = dict(error.payload)
+        super().__init__(str(error))
 
 
 def _split_roots(value: str) -> list[Path]:
@@ -211,6 +227,7 @@ class OpenscadCli:
         self.allowed_roots = tuple(Path(root).expanduser().resolve() for root in roots)
         self.max_source_bytes = max(1, int(max_source_bytes))
         self.max_timeout_secs = max(1.0, float(max_timeout_secs))
+        self._host_identity: Optional[tuple] = None
 
     @classmethod
     def from_env(cls) -> "OpenscadCli":
@@ -351,15 +368,22 @@ class OpenscadCli:
         else:
             ready = version_run["returncode"] == 0
         match = _VERSION.search(version_output)
+        version = match.group(1).strip() if match else self._first_line(version_output)
         return {
             "ready": ready,
             "executable": self.executable,
             "instance_type": "standalone",
-            "version": match.group(1).strip() if match else version_output.splitlines()[0],
+            "version": version,
+            "host_matrix": classify_host(version),
             "allowed_roots": [str(root) for root in self.allowed_roots],
             "max_source_bytes": self.max_source_bytes,
             "max_timeout_secs": self.max_timeout_secs,
         }
+
+    @staticmethod
+    def _first_line(version_output: str) -> str:
+        lines = [line.strip() for line in version_output.splitlines() if line.strip()]
+        return lines[0] if lines else ""
 
     @staticmethod
     def _remaining(deadline: float) -> float:
@@ -467,6 +491,8 @@ class OpenscadCli:
         args: Sequence[str],
         timeout_secs: float,
         overwrite: bool,
+        tool: str = "export_model",
+        expectations: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
         replaced_existing = output_path.exists()
         if replaced_existing and not overwrite:
@@ -492,19 +518,88 @@ class OpenscadCli:
                 raise OpenScadError("OpenSCAD produced an empty output file")
             os.replace(str(temp_output), str(output_path))
             digest = _sha256_file(output_path)
+            size = output_path.stat().st_size
             result.update(
                 {
                     "source_path": str(source_path),
                     "output_path": str(output_path),
-                    "bytes": output_path.stat().st_size,
+                    "bytes": size,
                     "sha256": digest,
                     "overwritten": replaced_existing,
                 }
+            )
+            result["verified"] = self._read_back(
+                tool,
+                output_path,
+                expectations,
+                source_path=source_path,
+                params=result.get("parameters"),
             )
             return result
         finally:
             if temp_output.exists():
                 temp_output.unlink()
+
+    def host_identity(self) -> "tuple[Optional[str], Optional[dict[str, Any]]]":
+        """Return ``(version, matrix_verdict)`` for this CLI instance.
+
+        The host executable is fixed for the lifetime of the instance, so the
+        probe runs once and is cached: a read-back fires on every mutating
+        call, and re-probing each time would add a process spawn per artifact.
+        A host that cannot report its version yields ``(None, None)`` rather
+        than raising -- it must not be able to silence a read-back mismatch.
+        """
+        if self._host_identity is not None:
+            return self._host_identity
+        try:
+            status = self._status_until(time.monotonic() + min(10, self.max_timeout_secs), 10)
+        except (OpenScadError, OSError, ValueError, IndexError):
+            self._host_identity = (None, None)
+            return self._host_identity
+        version = str(status.get("version") or "") or None
+        self._host_identity = (version, status.get("host_matrix"))
+        return self._host_identity
+
+    def _read_back(
+        self,
+        tool: str,
+        output_path: Path,
+        expectations: Optional[Mapping[str, Any]],
+        *,
+        source_path: Optional[Path] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> list[str]:
+        """Prove the artifact on disk is the one this call just wrote.
+
+        OpenSCAD exits 0 on several no-op paths, so an export is only reported
+        as a success after the file has been re-measured and, for the formats
+        the adapter owns, parsed back far enough to show it carries geometry.
+        The read-back runs against the host that produced the artifact, so the
+        host version and its matrix verdict travel with any mismatch.
+        """
+        expected: dict[str, Any] = {
+            "sha256": _sha256_file(output_path),
+            "bytes": output_path.stat().st_size,
+            "suffix": output_path.suffix.lower(),
+        }
+        if expectations:
+            expected.update({key: value for key, value in expectations.items()})
+        host_version, host_matrix = self.host_identity()
+        try:
+            return verify_artifact(
+                tool,
+                output_path,
+                expected=expected,
+                host_version=host_version,
+                host_matrix=host_matrix,
+                params={
+                    "source_path": str(source_path) if source_path is not None else None,
+                    "output_path": str(output_path),
+                    "parameters": params,
+                },
+            )
+        except WriteVerificationError as error:
+            raise OpenScadWriteVerificationError(error) from None
 
     def export_model(
         self,
@@ -532,7 +627,15 @@ class OpenscadCli:
             if stl_encoding not in ("ascii", "binary"):
                 raise OpenScadError("stl_encoding must be ascii or binary")
             args.extend(("--export-format", "asciistl" if stl_encoding == "ascii" else "binstl"))
-        return self._export(source, output, args, timeout_secs, overwrite)
+        return self._export(
+            source,
+            output,
+            args,
+            timeout_secs,
+            overwrite,
+            tool="export_model",
+            expectations={"parameters": parameters} if parameters else None,
+        )
 
     def render_preview(
         self,
@@ -577,7 +680,17 @@ class OpenscadCli:
                 raise OpenScadError("camera values must be finite")
             args.extend(("--camera", ",".join(str(float(item)) for item in camera)))
         args.extend(_parameter_args(parameters))
-        result = self._export(source, output, args, timeout_secs, overwrite)
+        result = self._export(
+            source,
+            output,
+            args,
+            timeout_secs,
+            overwrite,
+            tool="render_preview",
+            # The requested frame is what the PNG read-back compares against:
+            # a render that silently produced a different size is a failed write.
+            expectations={"width": int(width), "height": int(height)},
+        )
         result.update(
             {
                 "width": int(width),
