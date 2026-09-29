@@ -16,8 +16,8 @@
       "status": "supported",
       "evidence_kind": "real_ci",
       "evidence": "Real OpenSCAD 2021.01 end-to-end run in CI: status/validate_model/export_model(STL)/render_preview(PNG) all executed against the pinned build, 1 passed / 0 skipped. This is also the declared floor, so the tier carries both the release-line guarantee and a real-hardware run.",
-      "ci_matrix_entry": "OpenSCAD-2021.01-x86_64.AppImage",
-      "provenance": "Official 2021.01 release artifact."
+      "ci_matrix_entry": "apt:openscad@ubuntu-22.04",
+      "provenance": "Ubuntu 22.04 distribution package openscad 2021.01-4build1, which is the 2021.01 release build. Installed with apt rather than an AppImage: the distribution build links against the runner's own libraries, so it does not depend on the unbundled GL libraries an AppImage assumes."
     },
     {
       "id": "snapshot-span",

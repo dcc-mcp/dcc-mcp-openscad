@@ -137,17 +137,23 @@ def test_every_real_ci_tier_is_actually_run_in_ci(matrix: dict) -> None:
     workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
     job = workflow["jobs"].get("openscad-real")
     assert job, "no openscad-real job; real_ci claims would be unbacked"
-    entries = {
-        str(include.get("openscad_asset")) for include in job["strategy"]["matrix"]["include"]
+    provenance = {
+        str(include.get("openscad_provenance")) for include in job["strategy"]["matrix"]["include"]
+    }
+    versions = {
+        str(include.get("openscad_version")) for include in job["strategy"]["matrix"]["include"]
     }
     for entry in compat.supported_ranges(matrix):
-        if entry["evidence_kind"] == "real_ci":
-            assert entry["ci_matrix_entry"] in entries, (
-                "range %s claims real_ci via %s but CI never runs it"
-                % (entry["id"], entry["ci_matrix_entry"])
-            )
-            # The claim must also say which version that build produced.
-            assert entry["id"] in entry["evidence"] or "Real OpenSCAD" in entry["evidence"]
+        if entry["evidence_kind"] != "real_ci":
+            continue
+        assert entry["ci_matrix_entry"] in provenance, (
+            "range %s claims real_ci via %r, but no CI tier declares that provenance "
+            "(CI declares %s)" % (entry["id"], entry["ci_matrix_entry"], sorted(provenance))
+        )
+        # The claim must name the version that build actually produced.
+        assert any(version in entry["evidence"] for version in versions), (
+            "range %s does not name a real CI version in its evidence" % entry["id"]
+        )
 
 
 def test_matrix_is_valid_json_and_ships_with_the_package() -> None:

@@ -56,9 +56,14 @@ measured version and the covered ranges; it is never silently downgraded.
 
 | Range | Status | Evidence grade | CI build that proves it |
 | --- | --- | --- | --- |
-| `2021.01` | supported | `real_ci` — a pinned build runs the adapter end-to-end in CI | `OpenSCAD-2021.01-x86_64.AppImage` |
+| `2021.01` | supported | `real_ci` — a pinned build runs the adapter end-to-end in CI | `apt:openscad@ubuntu-22.04` |
 | `2021.02`–`2026.08` | supported | `static` — CLI surface reviewed; **no CI run for these builds** | none |
 | `2026.09` | supported | `real_ci` — a pinned build runs the adapter end-to-end in CI | `OpenSCAD-2026.09.29-x86_64.AppImage` |
+
+The `2021.01` tier is installed in CI from the Ubuntu 22.04 distribution
+package (`openscad` `2021.01-4build1`), which is that release build. The
+`2026.09` tier uses a pinned snapshot AppImage, since no distribution package
+provides it. Both are accepted only after reporting the expected version.
 
 The two grades are not equivalent, and the matrix records which is which:
 `real_ci` means the exact build above executed status, validate, export and
