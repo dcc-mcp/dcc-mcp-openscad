@@ -66,10 +66,12 @@ fi
 probe() {
   local executable="$1"
   local reported
+  local probe_log="${workdir}/probe-$(basename "${executable}").log"
   if ! reported="$(
-    timeout 120 "${executable}" --version 2>/dev/null | head -1
+    timeout 120 "${executable}" --version 2>"${probe_log}" | head -1
   )"; then
     echo "candidate exited non-zero: ${executable}" >&2
+    tail -20 "${probe_log}" >&2
     return 1
   fi
   reported="$(printf '%s' "${reported}" | tr -d '\r' | sed -n 's/^OpenSCAD version //p')"
