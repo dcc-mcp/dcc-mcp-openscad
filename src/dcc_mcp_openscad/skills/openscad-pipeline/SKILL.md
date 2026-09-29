@@ -5,7 +5,7 @@ description: >-
   standalone CLI. Use for deterministic SCAD build pipelines; do not use it
   for arbitrary command-line flags or source-code generation.
 license: MIT
-compatibility: "Python 3.7+; OpenSCAD 2021.01+; dcc-mcp-core 0.20.14+"
+compatibility: "Python 3.7+; OpenSCAD 2021.01.x or 2026.09.x; dcc-mcp-core 0.20.36+"
 allowed-tools: "python"
 metadata:
   dcc-mcp:
@@ -34,3 +34,9 @@ only after OpenSCAD succeeds.
 Use `render_preview` for PNGs and `export_model` for geometry or 2D artifacts.
 Both are asynchronous, bounded by `timeout_secs`, and refuse replacement unless
 `overwrite=true` is explicit.
+
+Both are mutating tools, so both read the artifact back before returning: the
+result carries a `verified` list naming the checks that ran, and a write that
+did not land raises an error naming the expected and actual values rather than
+reporting success. OpenSCAD is a CLI child process, not an embedded Python
+host, so a zero exit code on its own proves nothing about the artifact.
