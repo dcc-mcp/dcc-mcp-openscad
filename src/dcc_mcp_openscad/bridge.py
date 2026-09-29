@@ -358,11 +358,23 @@ class OpenscadCli:
         else:
             ready = version_run["returncode"] == 0
         match = _VERSION.search(version_output)
+        # A headless Linux openscad is a Qt GUI binary that exits 0 without
+        # printing anything when no display is available, so both probes can
+        # legitimately come back empty. Report that as an unversioned, not
+        # ready, host rather than indexing into an empty list.
+        lines = version_output.splitlines()
+        if match is not None:
+            version = match.group(1).strip()
+        elif lines:
+            version = lines[0]
+        else:
+            version = ""
+            ready = False
         return {
             "ready": ready,
             "executable": self.executable,
             "instance_type": "standalone",
-            "version": match.group(1).strip() if match else version_output.splitlines()[0],
+            "version": version,
             "allowed_roots": [str(root) for root in self.allowed_roots],
             "max_source_bytes": self.max_source_bytes,
             "max_timeout_secs": self.max_timeout_secs,

@@ -36,11 +36,26 @@ set -euo pipefail
 
 # Runs a candidate and prints the version it reports.
 # Diagnostics go to stderr because stdout is captured by the caller's $(...).
+# On Linux the openscad binary is a Qt GUI application: it prints its version
+# only once a display is available, and with no DISPLAY it exits 0 having
+# written nothing. xvfb provides a headless display, so probes run under it
+# whenever it is installed. This is why the version probe needs the same
+# treatment the PNG render does.
+run_probe_command() {
+  local executable="$1"
+  shift
+  if command -v xvfb-run >/dev/null 2>&1; then
+    timeout 180 xvfb-run -a "${executable}" "$@"
+  else
+    timeout 180 "${executable}" "$@"
+  fi
+}
+
 probe() {
   local executable="$1"
   local output probe_err
   probe_err="$(mktemp)"
-  if ! output="$(timeout 120 "${executable}" --version 2>"${probe_err}")"; then
+  if ! output="$(run_probe_command "${executable}" --version 2>"${probe_err}")"; then
     echo "candidate --version exited non-zero: ${executable}" >&2
     tail -20 "${probe_err}" >&2 || true
     rm -f "${probe_err}"
@@ -51,9 +66,9 @@ probe() {
   local version
   version="$(printf '%s' "${output}" | sed -n 's/.*OpenSCAD[[:space:]]*[Vv]ersion[[:space:]]*:*[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -1)"
   if [ -z "${version}" ]; then
-    # --version is not the only way a build reports itself.
+    # --info is the other way a build reports itself.
     local info
-    if info="$(timeout 120 "${executable}" --info 2>/dev/null)"; then
+    if info="$(run_probe_command "${executable}" --info 2>/dev/null)"; then
       version="$(printf '%s' "${info}" | sed -n 's/.*OpenSCAD[[:space:]]*[Vv]ersion[[:space:]]*:*[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -1)"
     fi
   fi

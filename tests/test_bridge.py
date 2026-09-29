@@ -163,6 +163,36 @@ def test_parameter_overrides_are_typed_and_deterministic():
         _parameter_args({"size": {"raw": "expression"}})
 
 
+def test_headless_host_that_prints_nothing_is_not_ready(tmp_path: Path):
+    """A Qt GUI openscad with no DISPLAY exits 0 having printed nothing.
+
+    That used to raise IndexError on `splitlines()[0]`; it must instead report
+    an unversioned host that is not ready, so callers fail closed instead of
+    crashing inside the status probe.
+    """
+
+    class SilentHost(OpenscadCli):
+        def __init__(self, root):
+            super().__init__(allowed_roots=[root])
+            self.executable = "silent-openscad"
+
+        def _run(self, args, timeout_secs, cwd=None):
+            return {
+                "returncode": 0,
+                "duration_secs": 0.01,
+                "stdout": "",
+                "stderr": "",
+                "stdout_truncated": False,
+                "stderr_truncated": False,
+                "diagnostics": [],
+            }
+
+    status = SilentHost(tmp_path).status()
+
+    assert status["ready"] is False
+    assert status["version"] == ""
+
+
 def test_status_and_capabilities_are_version_probed(tmp_path: Path):
     cli = FakeOpenScad(tmp_path)
 
