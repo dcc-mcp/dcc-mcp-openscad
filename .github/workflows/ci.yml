@@ -88,10 +88,14 @@ jobs:
           OPENSCAD_ASSET: ${{ matrix.openscad_asset }}
           OPENSCAD_BASE_URL: ${{ matrix.openscad_base_url }}
         run: bash .github/scripts/install-openscad.sh
-      - name: Install a virtual display
+      - name: Install a virtual display and GL libraries
+        # The extracted AppImage does not bundle the system GL stack: it needs
+        # EGL/GLX present to start at all, and xvfb plus Mesa to render a PNG.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libxkbcommon-x11-0 \
+            libdbus-1-3 libfontconfig1 libfreetype6 libxi6 libxrender1
       - name: Real OpenSCAD end-to-end
         run: |
           echo "OpenSCAD ${OPENSCAD_REAL_VERSION} via ${OPENSCAD_TEST_EXECUTABLE}"
