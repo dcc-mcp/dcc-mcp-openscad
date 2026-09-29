@@ -67,8 +67,14 @@ probe() {
   local executable="$1"
   local reported
   local probe_log="${workdir}/probe-$(basename "${executable}").log"
+  # OpenSCAD links Qt, so even `--version` starts a GUI application: without a
+  # display it exits before printing anything. xvfb is the CI-side display.
+  local runner=()
+  if command -v xvfb-run >/dev/null 2>&1; then
+    runner=(xvfb-run -a)
+  fi
   if ! reported="$(
-    timeout 120 "${executable}" --version 2>"${probe_log}" | head -1
+    timeout 180 "${runner[@]}" "${executable}" --version 2>"${probe_log}" | head -1
   )"; then
     echo "candidate exited non-zero: ${executable}" >&2
     tail -20 "${probe_log}" >&2
