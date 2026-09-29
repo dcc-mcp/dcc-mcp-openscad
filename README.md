@@ -28,9 +28,25 @@ The adapter does not accept arbitrary OpenSCAD command-line arguments or raw
 
 ## Requirements
 
-- Python 3.7+
-- `dcc-mcp-core` 0.20.14+
-- OpenSCAD 2021.01 or newer
+Two independent environments are involved; neither determines the other:
+
+- **Host side (Python):** Python 3.7+ with `dcc-mcp-core` 0.20.36+. This is the
+  `pip`-installed adapter, and `requires-python >= 3.7` applies only here.
+- **OpenSCAD side (not Python):** a standalone OpenSCAD executable, versioned
+  independently (`2021.01`, `2026.09.29`, ...). It is a compiled program, not a
+  Python package, and is upgraded through its own installer or package manager.
+
+OpenSCAD must fall inside the supported version matrix shipped with the wheel:
+
+| Range | Status | Evidence grade |
+| --- | --- | --- |
+| `2021.01` | supported | `real_ci` — pinned build runs end-to-end in CI |
+| `2021.02`–`2026.08` | supported | `static` — CLI surface reviewed, no CI run for these builds |
+| `2026.09` | supported | `real_ci` — pinned build runs end-to-end in CI |
+
+A version outside those ranges is rejected explicitly with the measured version
+and the covered ranges; it is never silently downgraded. See
+[`install.md`](install.md) for the full runtime model.
 
 On Windows, point to `openscad.com` when possible; if `openscad.exe` is
 configured and a sibling `openscad.com` exists, the adapter selects the console

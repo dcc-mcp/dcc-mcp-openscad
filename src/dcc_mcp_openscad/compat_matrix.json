@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "host": "openscad",
+  "matrix_version": "2026-09-30",
+  "notes": "Single source of truth for OpenSCAD host support, read by dcc_mcp_openscad.compat. A version outside `supported_ranges` is rejected explicitly; it is never silently downgraded. `evidence_kind` separates the two grades of support: `real_ci` means a pinned build executes the adapter end-to-end in CI; `static` means the CLI surface is reviewed but no CI run proves that exact build.",
+  "version_scheme": "YYYY.MM for release stamps, YYYY.MM.DD for the dated snapshot builds published at files.openscad.org/snapshots. Both parse to the same comparable triple.",
+  "executable_names": [
+    "openscad.com",
+    "openscad"
+  ],
+  "supported_ranges": [
+    {
+      "id": "2021.01",
+      "min_version": "2021.01",
+      "max_version": "2021.01.9999",
+      "status": "supported",
+      "evidence_kind": "real_ci",
+      "evidence": "Real OpenSCAD 2021.01 end-to-end run in CI: status/validate_model/export_model(STL)/render_preview(PNG) all executed against the pinned build, 1 passed / 0 skipped. This is also the declared floor, so the tier carries both the release-line guarantee and a real-hardware run.",
+      "ci_matrix_entry": "OpenSCAD-2021.01-x86_64.AppImage",
+      "provenance": "Official 2021.01 release artifact."
+    },
+    {
+      "id": "snapshot-span",
+      "min_version": "2021.02",
+      "max_version": "2026.08.9999",
+      "status": "supported",
+      "evidence_kind": "static",
+      "evidence": "Static and contract evidence only: no pinned build in this span is executed in CI. Every CLI flag the adapter emits (--hardwarnings, --check-parameters, --check-parameter-ranges, --export-format, --render, --imgsize, --projection, --colorscheme, --autocenter, --viewall, -D) is present in both the 2021.01 and the 2026.09.29 help output, and no adapter-visible removal is declared for the span, so the surface is treated as unchanged. Treat this tier as lower confidence than the two real_ci tiers.",
+      "ci_matrix_entry": null,
+      "provenance": "Interpolated between the two real_ci endpoints; not directly executed."
+    },
+    {
+      "id": "2026.09",
+      "min_version": "2026.09",
+      "max_version": "2026.09.9999",
+      "status": "supported",
+      "evidence_kind": "real_ci",
+      "evidence": "Real OpenSCAD 2026.09.29 end-to-end run in CI: same status/validate/export/render path, 1 passed / 0 skipped. Confirms the adapter still works after the --x/--view removals; the flags the adapter uses are all still present.",
+      "ci_matrix_entry": "OpenSCAD-2026.09.29-x86_64.AppImage",
+      "provenance": "Pinned files.openscad.org snapshot build."
+    }
+  ],
+  "breaking_changes": [
+    {
+      "id": "view-flags-removed",
+      "title": "Command-line view selectors `--x` and `--view` removed",
+      "changed_in": "2021.02",
+      "applies_from": "2021.02",
+      "kind": "removed",
+      "removed_symbol": "--x / --view",
+      "replacement": "none; use --camera, --imgsize, --projection, --autocenter and --viewall",
+      "symptom": "A caller that still passes --x or --view gets an unrecognised-option error instead of the expected camera framing, so a render silently changes framing or fails.",
+      "adapter_usage": "unused",
+      "enforcement": "guard",
+      "remediation": "The adapter never emits --x or --view; it always frames with --autocenter --viewall plus an explicit --camera when supplied."
+    },
+    {
+      "id": "summary-file-added",
+      "title": "Structured run summary via `--summary` / `--summary-file` added",
+      "changed_in": "2021.02",
+      "applies_from": "2021.02",
+      "kind": "added",
+      "removed_symbol": null,
+      "replacement": null,
+      "symptom": "Not a break for this adapter: the flag is optional and absent on 2021.01, so requesting it there would fail. Capability probing is the only safe way to detect it.",
+      "adapter_usage": "probed",
+      "enforcement": "capability_probe",
+      "remediation": "`OpenscadCli.capabilities` reports the flag as present or absent per host rather than assuming it, so callers can gate on the probe instead of the version."
+    },
+    {
+      "id": "backend-and-feature-flags-added",
+      "title": "Geometry backend selection and feature flags added (`--backend`, `--enable`, `--trace-depth`, `--trace-usermodule-parameters`)",
+      "changed_in": "2021.02",
+      "applies_from": "2021.02",
+      "kind": "added",
+      "removed_symbol": null,
+      "replacement": null,
+      "symptom": "Not a break for this adapter. Passing any of these to 2021.01 fails, so they must stay behind a capability probe.",
+      "adapter_usage": "unused",
+      "enforcement": "guard",
+      "remediation": "The adapter does not emit backend or feature flags; geometry backend selection is left at the host default so one command line works on every declared tier."
+    }
+  ],
+  "known_issues": [
+    {
+      "id": "2021.01-read-symlink-on-cwd",
+      "title": "OpenSCAD 2021.01 calls read_symlink on the working directory and aborts on volumes that do not support it",
+      "affected": "2021.01",
+      "not_observed_on": ["2026.09.29"],
+      "symptom": "Running 2021.01 with a working directory on a volume that rejects read_symlink prints `terminate called after throwing an instance of 'boost::filesystem::filesystem_error'` and exits 3 before doing any work. Observed on a Windows substituted drive; the same build runs normally from a plain local volume.",
+      "adapter_usage": "environmental",
+      "enforcement": "documented",
+      "remediation": "Run the OpenSCAD CLI with a working directory on a normal local filesystem. This is a host-build limitation, not an adapter defect, so it is recorded here instead of being worked around in the bridge."
+    }
+  ]
+}

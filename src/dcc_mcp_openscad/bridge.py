@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ._process import ProcessCleanupError, run_bounded_command
+from .compat import classify_host as _classify_host
+from .write_contract import (
+    read_png_size,
+    read_stl_shape,
+    verify_artifact,
+)
 
 _PARAMETER_NAME = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 _MODULE = re.compile(r"\bmodule\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(")
@@ -211,6 +217,7 @@ class OpenscadCli:
         self.allowed_roots = tuple(Path(root).expanduser().resolve() for root in roots)
         self.max_source_bytes = max(1, int(max_source_bytes))
         self.max_timeout_secs = max(1.0, float(max_timeout_secs))
+        self._host_version_cache: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "OpenscadCli":
@@ -368,6 +375,25 @@ class OpenscadCli:
             raise OpenScadTimeoutError("OpenSCAD exceeded the configured timeout")
         return remaining
 
+    def _host_version(self) -> Optional[str]:
+        """Best-effort host version for write-contract evidence.
+
+        Cached because every mutating call needs it and ``--version`` is a real
+        subprocess. Returns ``None`` rather than raising: a host that cannot
+        answer ``--version`` will also have failed the export, and that failure
+        is the more useful one to surface.
+        """
+        if self._host_version_cache is None:
+            try:
+                self._host_version_cache = str(self.status()["version"])
+            except Exception:  # noqa: BLE001 - evidence is best-effort by contract
+                self._host_version_cache = ""
+        return self._host_version_cache or None
+
+    def _host_matrix(self) -> Optional[dict]:
+        version = self._host_version()
+        return _classify_host(version) if version else None
+
     def capabilities(
         self,
         status: Optional[Mapping[str, Any]] = None,
@@ -467,6 +493,9 @@ class OpenscadCli:
         args: Sequence[str],
         timeout_secs: float,
         overwrite: bool,
+        tool: str,
+        extra_checks: Optional[Sequence[Mapping[str, Any]]] = None,
+        params: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
         replaced_existing = output_path.exists()
         if replaced_existing and not overwrite:
@@ -491,15 +520,33 @@ class OpenscadCli:
             if temp_output.stat().st_size <= 0:
                 raise OpenScadError("OpenSCAD produced an empty output file")
             os.replace(str(temp_output), str(output_path))
+            committed = output_path.stat()
             digest = _sha256_file(output_path)
             result.update(
                 {
                     "source_path": str(source_path),
                     "output_path": str(output_path),
-                    "bytes": output_path.stat().st_size,
+                    "bytes": committed.st_size,
                     "sha256": digest,
                     "overwritten": replaced_existing,
                 }
+            )
+            # Prove the change landed before reporting success. Every field is
+            # re-read from disk; nothing is carried over from the write.
+            result["read_back"] = verify_artifact(
+                tool,
+                output_path,
+                expected={
+                    "size": committed.st_size,
+                    "sha256": digest,
+                    "mtime_ns": int(
+                        getattr(committed, "st_mtime_ns", int(committed.st_mtime * 1e9))
+                    ),
+                },
+                host_version=self._host_version(),
+                host_matrix=self._host_matrix(),
+                params=params,
+                extra_checks=extra_checks,
             )
             return result
         finally:
@@ -528,11 +575,33 @@ class OpenscadCli:
             args.append("--hardwarnings")
         args.extend(("--check-parameters", "true", "--check-parameter-ranges", "true"))
         args.extend(_parameter_args(parameters))
+        checks = []
         if suffix == ".stl":
             if stl_encoding not in ("ascii", "binary"):
                 raise OpenScadError("stl_encoding must be ascii or binary")
             args.extend(("--export-format", "asciistl" if stl_encoding == "ascii" else "binstl"))
-        return self._export(source, output, args, timeout_secs, overwrite)
+
+            def _stl_encoding_check() -> dict[str, Any]:
+                shape = read_stl_shape(output) or {}
+                return {
+                    "check": "stl_encoding",
+                    "expected": stl_encoding,
+                    "actual": shape.get("encoding"),
+                    "remediation": "OpenSCAD ignored --export-format, so the caller would "
+                    "receive an STL it did not ask for.",
+                }
+
+            checks.append(_stl_encoding_check)
+        return self._export(
+            source,
+            output,
+            args,
+            timeout_secs,
+            overwrite,
+            tool="export_model",
+            extra_checks=checks,
+            params=parameters,
+        )
 
     def render_preview(
         self,
@@ -577,7 +646,27 @@ class OpenscadCli:
                 raise OpenScadError("camera values must be finite")
             args.extend(("--camera", ",".join(str(float(item)) for item in camera)))
         args.extend(_parameter_args(parameters))
-        result = self._export(source, output, args, timeout_secs, overwrite)
+
+        def _png_dimension_check() -> dict[str, Any]:
+            size = read_png_size(output)
+            return {
+                "check": "png_dimensions",
+                "expected": [int(width), int(height)],
+                "actual": [size[0], size[1]] if size else None,
+                "remediation": "The rendered PNG does not have the requested dimensions, so "
+                "the host ignored --imgsize.",
+            }
+
+        result = self._export(
+            source,
+            output,
+            args,
+            timeout_secs,
+            overwrite,
+            tool="render_preview",
+            extra_checks=[_png_dimension_check],
+            params=parameters,
+        )
         result.update(
             {
                 "width": int(width),

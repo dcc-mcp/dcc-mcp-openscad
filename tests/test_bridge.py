@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import struct
+import zlib
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,41 @@ from dcc_mcp_openscad.bridge import (
     OpenScadError,
     _parameter_args,
 )
+
+
+def last_export_call(cli: FakeOpenScad) -> list:
+    """Last call that actually produced an artifact.
+
+    The write contract probes ``--version`` for its evidence triple, so
+    ``calls[-1]`` is not necessarily the export any more.
+    """
+    return next(args for args, _, _ in reversed(cli.calls) if "-o" in args)
+
+
+def make_png(width: int, height: int) -> bytes:
+    """Build a genuinely valid greyscale PNG so header read-backs are real."""
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    raw = b"".join(b"\x00" + bytes([(x + y) % 256 for x in range(width)]) for y in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+def make_binary_stl(triangles: int = 2) -> bytes:
+    """Build a binary STL whose declared triangle count matches its length."""
+    body = b"".join(b"\x00" * 50 for _ in range(triangles))
+    return b"fake-openscad binary stl".ljust(80, b"\x00") + struct.pack("<I", triangles) + body
 
 
 class FakeOpenScad(OpenscadCli):
@@ -28,8 +65,33 @@ class FakeOpenScad(OpenscadCli):
             )
         if "-o" in args:
             output = Path(args[list(args).index("-o") + 1])
-            output.write_bytes(b"fake artifact")
+            self._write_artifact(output, args)
         return self._result(stderr="Geometries in cache: 1\n")
+
+    @staticmethod
+    def _write_artifact(output: Path, args: list) -> None:
+        """Write the artifact shape a real host would, honouring the flags.
+
+        The post-write contract reads these files back, so the fixture has to
+        produce the same headers OpenSCAD produces; a fixed byte string would
+        only prove the contract rejects nonsense.
+        """
+        if output.suffix.lower() == ".png":
+            width, height = 1200, 800
+            if "--imgsize" in args:
+                size = args[args.index("--imgsize") + 1].split(",")
+                width, height = int(size[0]), int(size[1])
+            output.write_bytes(make_png(width, height))
+            return
+        if output.suffix.lower() == ".stl":
+            if "asciistl" in args:
+                output.write_text(
+                    "solid fake\nfacet normal 0 0 0\nendsolid fake\n", encoding="utf-8"
+                )
+                return
+            output.write_bytes(make_binary_stl())
+            return
+        output.write_bytes(b"fake artifact")
 
     @staticmethod
     def _result(stdout="", stderr="", returncode=0):
@@ -123,7 +185,7 @@ def test_validate_model_compiles_only_to_temporary_output(tmp_path: Path):
 
     assert result["valid"] is True
     assert result["compiled_bytes"] > 0
-    args = cli.calls[-1][0]
+    args = last_export_call(cli)
     assert args[:5] == [
         "--hardwarnings",
         "--check-parameters",
@@ -147,8 +209,12 @@ def test_export_is_atomic_and_refuses_implicit_overwrite(tmp_path: Path):
     result = cli.export_model(str(source), str(output), overwrite=True)
 
     assert result["overwritten"] is True
-    assert result["bytes"] == len(b"fake artifact")
+    # The fixture writes a real binary STL header plus two triangles.
+    assert result["bytes"] == 84 + 2 * 50
     assert len(result["sha256"]) == 64
+    assert result["read_back"]["sha256"] == result["sha256"]
+    assert result["read_back"]["size"] == result["bytes"]
+    assert result["read_back"]["stl_encoding"] == "binary"
     assert not list(tmp_path.glob(".model.*.stl"))
 
 
@@ -167,7 +233,8 @@ def test_render_preview_validates_png_contract(tmp_path: Path):
 
     assert result["width"] == 640
     assert result["projection"] == "orthographic"
-    args = cli.calls[-1][0]
+    assert result["read_back"]["png_dimensions"] == [640, 480]
+    args = last_export_call(cli)
     assert ["--imgsize", "640,480"] == args[0:2]
 
     with pytest.raises(OpenScadError, match="between 64 and 8192"):

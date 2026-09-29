@@ -23,7 +23,7 @@ classifiers=[
   "Programming Language :: Python :: 3.12",
   "Operating System :: OS Independent",
 ]
-dependencies=["dcc-mcp-core>=0.20.14,<1.0.0","importlib-metadata>=4.13,<7; python_version<'3.8'"]
+dependencies=["dcc-mcp-core>=0.20.36,<1.0.0","importlib-metadata>=4.13,<7; python_version<'3.8'"]
 
 [project.urls]
 Homepage="https://github.com/dcc-mcp/dcc-mcp-openscad"
@@ -58,7 +58,7 @@ openscad="dcc_mcp_openscad:OpenscadMcpServer"
 
 [tool.hatch.build.targets.wheel]
 packages=["src/dcc_mcp_openscad"]
-artifacts=["src/dcc_mcp_openscad/skills/**"]
+artifacts=["src/dcc_mcp_openscad/skills/**","src/dcc_mcp_openscad/compat_matrix.json"]
 
 [tool.hatch.build.targets.sdist]
 exclude=["docs/**/*.png", "docs/**/*.svg", "docs/**/*.webp"]

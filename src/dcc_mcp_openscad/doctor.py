@@ -37,9 +37,12 @@ from dcc_mcp_core.deployment import (
 from .__version__ import __version__
 from ._process import ProcessCleanupError
 from ._process import run_bounded_command as _run_bounded_command
+from .compat import SUPPORTED as _SUPPORTED
+from .compat import classify_host as _classify_host
+from .compat import is_supported as _is_supported
+from .compat import unsupported_reason as _unsupported_reason
 
-SCHEMA_VERSION = INSTALL_SOP_SCHEMA_VERSION
-MINIMUM_CORE_VERSION = "0.20.14"
+MINIMUM_CORE_VERSION = "0.20.36"
 MINIMUM_HOST_VERSION = "2021.01"
 MINIMUM_HOST_TUPLE = (2021, 1, 0)
 DCC_TYPE = "openscad"
@@ -75,11 +78,14 @@ _CAPABILITY_FLAGS = (
 class LifecycleFailure(RuntimeError):
     """Stable classified failure that never carries a raw external diagnostic."""
 
-    def __init__(self, exit_code: int, stage: str, reason: str) -> None:
+    def __init__(
+        self, exit_code: int, stage: str, reason: str, details: Optional[Dict[str, Any]] = None
+    ) -> None:
         super().__init__(reason)
         self.exit_code = int(exit_code)
         self.stage = stage
         self.reason = reason
+        self.details = details or {}
 
 
 @dataclass(frozen=True)
@@ -287,8 +293,14 @@ def _capture_runtime(executable: Path, deadline: float) -> Dict[str, Any]:
     if match is None:
         raise LifecycleFailure(EXIT_VERIFY, "runtime", "product_identity_invalid")
     version = match.group(1)
-    if _host_version_tuple(version) < MINIMUM_HOST_TUPLE:
-        raise LifecycleFailure(EXIT_PREFLIGHT, "host_version", "host_version_unsupported")
+    verdict = _classify_host(version)
+    if verdict["status"] != _SUPPORTED:
+        raise LifecycleFailure(
+            EXIT_PREFLIGHT,
+            "host_version",
+            "host_version_unsupported",
+            {"host_matrix": verdict, "detail": _unsupported_reason(verdict)},
+        )
     help_result = _run_probe(
         [before["path"], "--help"],
         timeout=_remaining(deadline),
@@ -333,6 +345,31 @@ def _capture_core_identity() -> Dict[str, Any]:
     return {"version": version, "module": module_identity, "python": python_identity}
 
 
+def _schema_version() -> int:
+    """Read the schema version from the schema Core actually ships.
+
+    Core's ``INSTALL_SOP_SCHEMA_VERSION`` constant and the ``const`` inside the
+    shipped schema file disagree from 0.20.36 onwards. The schema is what a
+    report is validated against, so it is the only safe source: taking the
+    constant instead makes every report fail its own contract.
+    """
+    try:
+        const = (
+            load_install_sop_schema().get("properties", {}).get("schema_version", {}).get("const")
+        )
+    except (OSError, ValueError, TypeError):
+        return int(INSTALL_SOP_SCHEMA_VERSION)
+    if isinstance(const, bool) or not isinstance(const, int):
+        return int(INSTALL_SOP_SCHEMA_VERSION)
+    return const
+
+
+# Resolved once at import: Core's INSTALL_SOP_SCHEMA_VERSION constant and the
+# `const` inside the shipped schema disagree from 0.20.36 onwards, and the
+# schema is what every report is validated against.
+SCHEMA_VERSION = _schema_version()
+
+
 def _validate_schema_loader() -> None:
     try:
         schema = load_install_sop_schema()
@@ -341,7 +378,7 @@ def _validate_schema_loader() -> None:
     if (
         not isinstance(schema, dict)
         or schema.get("type") != "object"
-        or schema.get("properties", {}).get("schema_version", {}).get("const") != SCHEMA_VERSION
+        or schema.get("properties", {}).get("schema_version", {}).get("const") is None
         or not isinstance(schema.get("required"), list)
     ):
         raise LifecycleFailure(EXIT_PREFLIGHT, "schema", "core_schema_invalid")
@@ -418,12 +455,18 @@ def _read_receipt(path: Path) -> Optional[Dict[str, Any]]:
     openscad = _validate_identity_record(
         value.get("openscad"), "openscad", ("product", "version", "capabilities")
     )
+    recorded_version = openscad.get("version")
     if (
         openscad.get("product") != "OpenSCAD"
-        or not isinstance(openscad.get("version"), str)
-        or _host_version_tuple(openscad["version"]) < MINIMUM_HOST_TUPLE
+        or not isinstance(recorded_version, str)
+        or not _is_supported(recorded_version)
     ):
-        raise LifecycleFailure(EXIT_PREFLIGHT, "receipt", "receipt_openscad_invalid")
+        raise LifecycleFailure(
+            EXIT_PREFLIGHT,
+            "receipt",
+            "receipt_openscad_invalid",
+            {"host_matrix": _classify_host(str(recorded_version))},
+        )
     capabilities = openscad.get("capabilities")
     if (
         not isinstance(capabilities, dict)
@@ -606,7 +649,7 @@ def _next_step(identifier: str, description: str, why: str, command: list[str]) 
 
 def _base_result(request: DoctorRequest, core_version: str) -> Dict[str, Any]:
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": _schema_version(),
         "status": "running",
         "dcc_type": DCC_TYPE,
         "adapter_version": __version__,
@@ -629,6 +672,8 @@ def _failure_result(request: DoctorRequest, failure: LifecycleFailure) -> Dict[s
     result.update({"status": "failed", "exit_code": failure.exit_code})
     result["verify"].update({"failure_stage": failure.stage, "failure_reason": failure.reason})
     result["steps"] = [_step(failure.stage, "failed", "The lifecycle operation failed closed.")]
+    if failure.details:
+        result["details"] = dict(failure.details)
     return result
 
 
@@ -751,6 +796,9 @@ def _run_lifecycle(request: DoctorRequest) -> Dict[str, Any]:
         "sha256": runtime["sha256"],
         "capabilities": runtime["capabilities"],
     }
+    # The host verdict is reported next to the runtime rather than inside it:
+    # `runtime` is the receipt record and its field set is contractually exact.
+    result["host_matrix"] = _classify_host(str(runtime["version"]))
 
     if request.operation == "doctor":
         result.update({"status": "ok", "exit_code": EXIT_OK})

@@ -61,20 +61,25 @@ def _run_json(arguments: list[str], capsys) -> tuple[int, dict]:
     return exit_code, payload
 
 
-def test_uses_only_the_official_core_02014_install_contract() -> None:
+def test_uses_only_the_official_core_02036_install_contract() -> None:
     from dcc_mcp_core.deployment import load_install_sop_schema
 
     import dcc_mcp_openscad.doctor as lifecycle
 
-    assert lifecycle.MINIMUM_CORE_VERSION == "0.20.14"
+    assert lifecycle.MINIMUM_CORE_VERSION == "0.20.36"
     assert lifecycle.load_install_sop_schema() == load_install_sop_schema()
+    # The reported schema version must be the one the shipped schema demands.
+    # Core's INSTALL_SOP_SCHEMA_VERSION constant disagrees with that schema from
+    # 0.20.36 onwards, so trusting the constant would fail every report.
+    schema = load_install_sop_schema()
+    assert lifecycle.SCHEMA_VERSION == schema["properties"]["schema_version"]["const"]
     assert lifecycle.SCHEMA_VERSION == 1
     assert lifecycle.LIFECYCLE_COMMANDS == frozenset(
         {"doctor", "install", "status", "verify", "uninstall", "upgrade"}
     )
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = pyproject.read_text(encoding="utf-8")
-    assert '"dcc-mcp-core>=0.20.14,<1.0.0"' in project
+    assert '"dcc-mcp-core>=0.20.36,<1.0.0"' in project
     assert "\"importlib-metadata>=4.13,<7; python_version<'3.8'\"" in project
 
 

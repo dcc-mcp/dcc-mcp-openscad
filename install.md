@@ -7,15 +7,65 @@ is installed into the OpenSCAD application. The canonical raw guide is
 ## Requirements
 
 - OpenSCAD 2021.01 or newer from the official project or an operating-system
-  package repository.
-- External Python 3.7 or newer with `dcc-mcp-core>=0.20.14,<1.0.0`.
+  package repository, and inside the supported ranges below. "Newer" alone is
+  not sufficient: a build above the matrix (for example `2027.01`) is rejected
+  rather than assumed compatible.
+- External Python 3.7 or newer with `dcc-mcp-core>=0.20.36,<1.0.0`.
 - Read/write access to each path in `DCC_MCP_OPENSCAD_ALLOWED_ROOTS`.
 
 The adapter does not download, scrape, update, or execute a remote OpenSCAD
 payload. There is no adapter-managed binary cache. OpenSCAD remains owned by
 the operating-system package manager or official installation.
 
+## Runtime model: two separate environments
+
+This adapter runs in two environments that do **not** share a version, an
+interpreter, or an upgrade path. Keeping them apart in your head prevents most
+installation surprises:
+
+| | Host side (the adapter) | OpenSCAD side (the tool) |
+| --- | --- | --- |
+| What it is | A Python package you install with `pip` | A standalone executable on the machine |
+| Language | Python, `requires-python >= 3.7` | Not Python: a compiled C++ program |
+| Version source | `dcc-mcp-openscad` and `dcc-mcp-core` wheel versions | The OpenSCAD build you installed (for example `2021.01`) |
+| How it is upgraded | `pip install --upgrade dcc-mcp-openscad` | Your OS package manager or the official OpenSCAD installer |
+| How the adapter finds it | n/a — this is the code that runs | `DCC_MCP_OPENSCAD_EXECUTABLE`, `PATH`, or a standard install location |
+
+Consequences worth stating explicitly:
+
+- **The Python version and the OpenSCAD version are independent.** Installing
+  Python 3.12 does not change which OpenSCAD is used, and upgrading OpenSCAD
+  does not affect the adapter's Python requirements. The `requires-python`
+  floor applies only to the host side; it says nothing about OpenSCAD, which
+  is not a Python program at all.
+- **The two sides only meet at the CLI boundary.** The adapter starts the
+  OpenSCAD executable as a child process, passes typed flags, and reads the
+  artifacts it writes. There is no embedded interpreter, plugin, or shared
+  library in either direction.
+- **Each side is verified separately.** `dcc-mcp-openscad doctor --json`
+  reports the Python/Core side and then probes the OpenSCAD executable,
+  reporting the measured version, the capability flags it found, and whether
+  that version is inside the supported matrix.
+
 ## Supported versions
+
+Host support is decided by a machine-readable matrix shipped inside the wheel
+(`src/dcc_mcp_openscad/compat_matrix.json`), not by a single minimum. A version
+outside the declared ranges is rejected with an explicit error naming the
+measured version and the covered ranges; it is never silently downgraded.
+
+| Range | Status | Evidence grade | CI build that proves it |
+| --- | --- | --- | --- |
+| `2021.01` | supported | `real_ci` — a pinned build runs the adapter end-to-end in CI | `OpenSCAD-2021.01-x86_64.AppImage` |
+| `2021.02`–`2026.08` | supported | `static` — CLI surface reviewed; **no CI run for these builds** | none |
+| `2026.09` | supported | `real_ci` — a pinned build runs the adapter end-to-end in CI | `OpenSCAD-2026.09.29-x86_64.AppImage` |
+
+The two grades are not equivalent, and the matrix records which is which:
+`real_ci` means the exact build above executed status, validate, export and
+render in CI with zero skipped tests; `static` means every flag the adapter
+emits is present in the help output of both endpoints and no removal is
+declared for the span, but no pinned build in the span is executed. Treat the
+`static` range as lower confidence.
 
 | Platform | Automatic discovery | Explicit example |
 | --- | --- | --- |
@@ -25,7 +75,7 @@ the operating-system package manager or official installation.
 
 On Windows, use `openscad.com` for machine-readable console behavior. If an
 `openscad.exe` override has a sibling `openscad.com`, the adapter selects the
-`.com` launcher automatically. The minimum supported version is 2021.01.
+`.com` launcher automatically. The declared floor is 2021.01.
 
 ## Agent quick path
 
@@ -116,7 +166,7 @@ Stable exits are:
 | Code | Meaning |
 | --- | --- |
 | `0` | Core, executable, OpenSCAD version, and capability probe are usable |
-| `10` | Discovery, configuration, Core floor, or 2021.01 host floor failed |
+| `10` | Discovery, configuration, Core floor, or the host version matrix failed |
 | `20` | External artifact acquisition failed (not used by this non-provisioning adapter) |
 | `30` | Receipt installation, upgrade, lock, or rollback failed |
 | `40` | The executable was found but runtime/capability verification failed |
@@ -176,7 +226,11 @@ does not remove the application, an operator-owned file, or a binary cache.
   exists and uses the correct platform path separator.
 - `core_version`, exit `10`: upgrade Core in the external Python that owns the
   adapter wheel.
-- `host_version`, exit `10`: select OpenSCAD 2021.01 or newer.
+- `host_version`, exit `10`: the measured OpenSCAD version is outside the
+  supported matrix. The failure reports the measured version, the covered
+  ranges, and which range it fell into (`too_old`, `too_new`, `unlisted`, or
+  `unknown`). Select a build inside a declared range rather than assuming a
+  newer build is compatible.
 - `receipt` or `ownership`, exit `30`/`40`: keep the receipt on a regular,
   non-reparse path and use `upgrade --yes` to adopt an intentionally changed
   Core, Python, or OpenSCAD executable.
