@@ -82,8 +82,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            xvfb libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri libxkbcommon-x11-0 \
-            libdbus-1-3 libfontconfig1 libfreetype6 libxi6 libxrender1
+            xvfb libegl1 libgl1 libglvnd0 libopengl0 libglx-mesa0 libgl1-mesa-dri \
+            libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libfreetype6 libxi6 libxrender1
       - name: Cache OpenSCAD AppImage
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
