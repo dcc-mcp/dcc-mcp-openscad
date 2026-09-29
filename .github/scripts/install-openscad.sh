@@ -73,13 +73,21 @@ probe() {
   if command -v xvfb-run >/dev/null 2>&1; then
     runner=(xvfb-run -a)
   fi
-  if ! reported="$(
-    timeout 180 "${runner[@]}" "${executable}" --version 2>"${probe_log}" | head -1
-  )"; then
-    echo "candidate exited non-zero: ${executable}" >&2
+  reported="$(
+    timeout 180 "${runner[@]}" "${executable}" --version >"${probe_log}.out" 2>"${probe_log}"
+  )"
+  local code=$?
+  if [ "${code}" -ne 0 ]; then
+    echo "candidate exited ${code}: ${executable}" >&2
+    echo "--- stdout ---" >&2
+    tail -20 "${probe_log}.out" >&2
+    echo "--- stderr ---" >&2
     tail -20 "${probe_log}" >&2
+    echo "--- missing shared libraries ---" >&2
+    ldd "${executable}" 2>/dev/null | grep "not found" >&2 || echo "(none)" >&2
     return 1
   fi
+  reported="$(head -1 "${probe_log}.out")"
   reported="$(printf '%s' "${reported}" | tr -d '\r' | sed -n 's/^OpenSCAD version //p')"
   if [ -z "${reported}" ]; then
     echo "candidate reported no OpenSCAD version: ${executable}" >&2
