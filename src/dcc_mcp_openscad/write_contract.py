@@ -342,6 +342,25 @@ def verify_artifact(
     suffix = str(expected.get("suffix") or "").lower()
     verified: List[str] = []
 
+    # The exported identity is what makes the identity checks falsifiable.
+    # Without it they degrade into "the file agrees with itself", which is the
+    # one failure this contract must never let through, so it fails closed.
+    if expected.get("sha256") is None or expected.get("bytes") is None:
+        raise _mismatch(
+            tool,
+            "artifact.recorded_identity",
+            "the sha256 and byte length recorded by the export",
+            {"sha256": expected.get("sha256"), "bytes": expected.get("bytes")},
+            host_version=host_version,
+            host_matrix=host_matrix,
+            params=params,
+            remediation=(
+                "the export must measure the artifact it writes and pass both values to the "
+                "read-back; a read-back that re-measures the file cannot detect a write that "
+                "was replaced or never landed"
+            ),
+        )
+
     # --- Identity -------------------------------------------------------
     if not os.path.isfile(path):
         raise _mismatch(
@@ -444,6 +463,7 @@ def _verify_stl(
             host_matrix,
             params,
             "stl.ascii_facets",
+            (),  # the ASCII encoding declares no length to reconcile
         )
 
     expected_size = _STL_HEADER_BYTES + facets * _STL_FACET_BYTES
@@ -470,6 +490,7 @@ def _verify_stl(
         host_matrix,
         params,
         "stl.facets",
+        ("stl.size_consistent",),
     )
 
 
@@ -482,6 +503,7 @@ def _checked_facets(
     host_matrix: Optional[Mapping[str, Any]],
     params: Optional[Mapping[str, Any]],
     check: str,
+    extra: Sequence[str] = (),
 ) -> List[str]:
     if facets < _MIN_FACETS:
         raise _mismatch(
@@ -497,7 +519,9 @@ def _checked_facets(
             ),
         )
     del expected_size, actual_bytes
-    return [check, "stl.non_empty_geometry"]
+    # Every check that ran is reported, so a caller can tell which guards a
+    # format actually got instead of inferring it from the ones that fired.
+    return [check, "stl.non_empty_geometry"] + list(extra)
 
 
 def _verify_png(

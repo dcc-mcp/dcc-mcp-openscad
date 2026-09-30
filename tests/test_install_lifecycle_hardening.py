@@ -195,7 +195,11 @@ def test_install_verify_uninstall_are_receipted_owned_and_idempotent(
     assert local_receipt["dcc_type"] == "openscad"
     assert local_receipt["openscad"]["sha256"]
     assert local_receipt["python"]["sha256"]
-    assert local_receipt["core"]["version"] >= "0.20.36"
+    # Compared as a version tuple, not as a string, so a future 0.100.0 does
+    # not satisfy the 0.20.36 floor by lexicographic accident.
+    from dcc_mcp_openscad.doctor import MINIMUM_CORE_VERSION, _version_tuple
+
+    assert _version_tuple(local_receipt["core"]["version"]) >= _version_tuple(MINIMUM_CORE_VERSION)
 
     exit_code, verified = _run_json(["verify", *common], capsys)
     assert exit_code == 0

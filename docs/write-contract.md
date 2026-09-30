@@ -40,9 +40,17 @@ author to decide whether it owes a read-back.
 
 ### Identity
 
-The file at the final path must exist, be non-empty, and its re-measured size
-and SHA-256 must match what the export recorded. This catches the "exited 0,
-wrote nothing" and "wrote somewhere else" classes.
+The file at the final path must exist and be non-empty, and its size and
+SHA-256 must match **the values the export recorded when it staged the
+artifact**. This catches the "exited 0, wrote nothing" and "wrote somewhere
+else" classes.
+
+The comparison is against a recorded value, never against a second
+measurement of the same file: a read-back that re-measures what it is checking
+compares the file with itself and cannot fail. `verify_artifact` therefore
+requires `sha256` and `bytes` in `expected` and fails closed
+(`artifact.recorded_identity`) when they are missing, so the check can never
+silently degrade into an existence test.
 
 ### Content
 
@@ -55,6 +63,10 @@ artifact is parsed back far enough to show it holds what was asked for:
 | ASCII STL | `stl.ascii_facets` | at least one `facet normal` block is present |
 | PNG | `png.header`, `png.dimensions` | the IHDR is valid and the frame matches the requested width and height |
 | other formats | identity checks only | the artifact was written; the adapter makes no claim about parsing it |
+
+Every check that ran is listed in the result's `verified`, so a caller can see
+which guards a format actually got instead of inferring it from the ones that
+fired.
 
 ## What a failure carries
 

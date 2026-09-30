@@ -158,7 +158,11 @@ def _version_tuple(value: object) -> tuple[int, int, int]:
 
 
 def _host_version_tuple(value: object) -> tuple[int, int, int]:
-    match = re.fullmatch(r"([0-9]{4})\.(0[1-9]|1[0-2]|[1-9])(?:\.(0|[1-9][0-9]*))?", str(value))
+    # The day segment accepts zero padding to match `_VERSION` and
+    # `compat.parse_version`: snapshots built on the 1st-9th of a month report
+    # it padded (`2026.09.01`), and rejecting that here would let a host the
+    # probe just accepted fail on its own receipt.
+    match = re.fullmatch(r"([0-9]{4})\.(0[1-9]|1[0-2]|[1-9])(?:\.([0-9]{1,4}))?", str(value))
     if match is None:
         return ()  # type: ignore[return-value]
     return (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))

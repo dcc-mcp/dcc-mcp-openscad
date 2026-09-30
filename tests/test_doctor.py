@@ -63,9 +63,11 @@ def test_doctor_cli_reports_missing_openscad_as_stable_json(tmp_path: Path, caps
         "failure_stage": "identity",
         "failure_reason": "file_missing",
     }
-    from dcc_mcp_openscad.doctor import MINIMUM_CORE_VERSION
+    from dcc_mcp_openscad.doctor import MINIMUM_CORE_VERSION, _version_tuple
 
-    assert result["core_version"] >= MINIMUM_CORE_VERSION
+    # Compared as a version tuple, not as a string: "0.100.0" < "0.20.36"
+    # lexicographically, which would pass a floor it does not satisfy.
+    assert _version_tuple(result["core_version"]) >= _version_tuple(MINIMUM_CORE_VERSION)
     assert result["receipt_path"] == "configured"
     assert str(private_path) not in captured.out
 
@@ -219,3 +221,43 @@ def test_windows_explicit_exe_prefers_console_sibling(tmp_path: Path) -> None:
     cli = OpenscadCli(str(gui), allowed_roots=[tmp_path])
 
     assert cli.executable == str(console.resolve())
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "2021.01",
+        "2026.09.29",
+        "2026.09.10",
+        # Zero-padded days: snapshots built on the 1st-9th report them padded.
+        # A host the version probe accepts must not then fail on its own
+        # receipt, so the receipt-side parser accepts the same spelling.
+        "2026.09.01",
+        "2026.09.09",
+        "2026.01.05",
+    ],
+)
+def test_the_receipt_accepts_every_version_spelling_the_probe_emits(version: str) -> None:
+    import dcc_mcp_openscad.doctor as lifecycle
+
+    parsed = lifecycle._host_version_tuple(version)
+    assert parsed, "the receipt parser rejected a version the probe emits: %s" % version
+    assert parsed >= lifecycle.MINIMUM_HOST_TUPLE, version
+    # The matrix verdict is a separate question from the parser: a covered
+    # version is `supported`, anything else is refused with its own code.
+    assert lifecycle.classify_host(version)["status"] in ("supported", "unlisted"), version
+
+
+def test_a_receipt_for_a_zero_padded_snapshot_day_round_trips() -> None:
+    """Regression: a padded day used to parse to () and fail as invalid."""
+    import dcc_mcp_openscad.doctor as lifecycle
+
+    for version in ("2026.09.01", "2026.09.09", "2026.01.05"):
+        assert lifecycle._host_version_tuple(version) == (
+            int(version[:4]),
+            int(version[5:7]),
+            int(version[8:]),
+        ), version
+    # A host below the matrix is still rejected by the same parser.
+    assert lifecycle._host_version_tuple("2020.12") < lifecycle.MINIMUM_HOST_TUPLE
+    assert lifecycle._host_version_tuple("garbage") == ()

@@ -375,6 +375,26 @@ def test_a_png_of_the_wrong_frame_size_is_refused(tmp_path: Path):
     assert error.actual == [32, 32]
 
 
+def test_a_read_back_without_a_recorded_identity_fails_closed(tmp_path: Path):
+    """A read-back that measures the file and compares it with itself proves
+
+    nothing: the two identity checks would be unfalsifiable. `verify_artifact`
+    is therefore only meaningful when the caller supplies what it recorded.
+    """
+    path = tmp_path / "model.off"
+    path.write_bytes(b"OFF\n")
+
+    with pytest.raises(write_contract.WriteVerificationError) as excinfo:
+        write_contract.verify_artifact(
+            "export_model",
+            path,
+            expected={"suffix": ".off"},  # no sha256 / bytes recorded
+            host_version=HOST_VERSION,
+        )
+
+    assert "recorded" in str(excinfo.value)
+
+
 def test_other_formats_still_get_the_identity_read_back(tmp_path: Path):
     """The generic path proves the artifact, without claiming to parse it."""
     path = tmp_path / "model.3mf"
@@ -451,6 +471,44 @@ def test_export_model_reports_the_checks_it_ran(tmp_path: Path):
         "stl.facets",
     ):
         assert check in result["verified"], check
+
+
+def test_export_model_refuses_an_artifact_replaced_after_the_write(tmp_path: Path):
+    """The regression this whole contract exists for.
+
+    The read-back compares the file against the identity the export recorded.
+    If it measured the file again it would compare the file with itself and
+    this swap -- the "reported success, artifact unchanged" bug -- would pass.
+    """
+    source = _source(tmp_path)
+    cli = _DroppingOpenScad(tmp_path, b"\x00" * 96)
+    output = tmp_path / "part.off"  # a format with no content parser
+
+    original = cli._read_back
+
+    def swap_then_read_back(tool, path, expectations, **kwargs):
+        # Runs after the export already recorded digest and size.
+        path.write_bytes(b"\xff" * 119)
+        return original(tool, path, expectations, **kwargs)
+
+    cli._read_back = swap_then_read_back
+
+    with pytest.raises(OpenScadWriteVerificationError) as excinfo:
+        cli.export_model(str(source), str(output))
+
+    assert excinfo.value.verification["check"] == "artifact.bytes"
+    assert excinfo.value.verification["expected"] == 96
+    assert excinfo.value.verification["actual"] == 119
+
+
+def test_read_back_without_a_recorded_identity_is_refused(tmp_path: Path):
+    """A bridge read-back with no exported identity fails closed."""
+    from dcc_mcp_openscad.bridge import OpenScadError
+
+    cli = _DroppingOpenScad(tmp_path, b"\x00" * 96)
+
+    with pytest.raises(OpenScadError, match="recorded no artifact identity"):
+        cli._read_back("export_model", tmp_path / "part.off", None)
 
 
 def test_export_model_refuses_an_artifact_with_no_geometry(tmp_path: Path):

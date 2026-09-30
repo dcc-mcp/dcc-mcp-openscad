@@ -531,7 +531,9 @@ class OpenscadCli:
             result["verified"] = self._read_back(
                 tool,
                 output_path,
-                expectations,
+                # `digest` and `size` are what this call measured when it
+                # staged the artifact; the read-back compares against them.
+                dict(expectations or {}, sha256=digest, bytes=size),
                 source_path=source_path,
                 params=result.get("parameters"),
             )
@@ -572,18 +574,27 @@ class OpenscadCli:
         """Prove the artifact on disk is the one this call just wrote.
 
         OpenSCAD exits 0 on several no-op paths, so an export is only reported
-        as a success after the file has been re-measured and, for the formats
-        the adapter owns, parsed back far enough to show it carries geometry.
+        as a success after the file has been measured again and compared
+        against what *this call recorded*, and -- for the formats the adapter
+        owns -- parsed back far enough to show it carries geometry.
+
+        ``expectations`` must carry the ``sha256`` and ``bytes`` the export
+        recorded. Measuring them again here would compare the file with itself
+        and make those two checks unfalsifiable, which is the exact "reported
+        success, artifact unchanged" failure this contract exists to catch.
         The read-back runs against the host that produced the artifact, so the
         host version and its matrix verdict travel with any mismatch.
         """
-        expected: dict[str, Any] = {
-            "sha256": _sha256_file(output_path),
-            "bytes": output_path.stat().st_size,
-            "suffix": output_path.suffix.lower(),
-        }
+        expected: dict[str, Any] = {"suffix": output_path.suffix.lower()}
         if expectations:
             expected.update({key: value for key, value in expectations.items()})
+        if expected.get("sha256") is None or expected.get("bytes") is None:
+            # A read-back without the exported identity proves nothing, so it
+            # fails closed instead of degrading into an existence check.
+            raise OpenScadError(
+                "%s cannot verify %s: the export recorded no artifact identity"
+                % (tool, output_path.name)
+            )
         host_version, host_matrix = self.host_identity()
         try:
             return verify_artifact(
