@@ -37,11 +37,46 @@ from dcc_mcp_core.deployment import (
 from .__version__ import __version__
 from ._process import ProcessCleanupError
 from ._process import run_bounded_command as _run_bounded_command
+from .compat import (
+    SUPPORTED,
+    TOO_NEW,
+    UNKNOWN,
+    UNLISTED,
+    classify_host,
+    load_matrix,
+    minimum_host_version,
+    supported_range_labels,
+    unsupported_reason,
+)
 
-SCHEMA_VERSION = INSTALL_SOP_SCHEMA_VERSION
-MINIMUM_CORE_VERSION = "0.20.14"
-MINIMUM_HOST_VERSION = "2021.01"
+# `INSTALL_SOP_SCHEMA_VERSION` is the revision of the published schema *artifact*
+# (2 since dcc-mcp-core 0.20.36). The `schema_version` field the artifact pins
+# on a report document is a separate, stable counter and stays 1, so the two are
+# named separately here: conflating them makes every report fail validation the
+# moment the resolved core advances.
+ARTIFACT_SCHEMA_VERSION = INSTALL_SOP_SCHEMA_VERSION
+SCHEMA_VERSION = 1
+MINIMUM_CORE_VERSION = "0.20.36"
+MINIMUM_HOST_VERSION = minimum_host_version(load_matrix()) or "2021.01"
 MINIMUM_HOST_TUPLE = (2021, 1, 0)
+
+# Machine-readable error codes for host support verdicts.
+ERROR_HOST_TOO_OLD = "openscad_host_version_unsupported"
+ERROR_HOST_TOO_NEW = "openscad_host_version_unverified"
+ERROR_HOST_UNLISTED = "openscad_host_version_unlisted"
+ERROR_HOST_UNKNOWN = "openscad_host_version_unparsable"
+
+_HOST_ERROR_CODES = {
+    TOO_NEW: ERROR_HOST_TOO_NEW,
+    UNLISTED: ERROR_HOST_UNLISTED,
+    UNKNOWN: ERROR_HOST_UNKNOWN,
+}
+
+
+def _host_error_code(status):
+    return _HOST_ERROR_CODES.get(status, ERROR_HOST_TOO_OLD)
+
+
 DCC_TYPE = "openscad"
 RECEIPT_VERSION = 1
 LIFECYCLE_COMMANDS = frozenset({"doctor", "install", "status", "verify", "uninstall", "upgrade"})
@@ -55,7 +90,11 @@ EXIT_REQUIRES_RESTART = INSTALL_EXIT_REQUIRES_RESTART
 
 _VERSION = re.compile(
     r"^OpenSCAD(?:\s+Version:|\s+version)?\s*:?\s*"
-    r"((?:0|[1-9][0-9]{3})\.(?:0[1-9]|1[0-2]|[1-9])(?:\.(?:0|[1-9][0-9]*))?)\s*$",
+    # `YYYY.MM` for releases and `YYYY.MM.DD` for dated snapshots. The day is
+    # zero padded on early-month snapshots (`2026.09.01`), so it is accepted
+    # padded or not; rejecting it here would report a supported host as
+    # `product_identity_invalid`.
+    r"((?:0|[1-9][0-9]{3})\.(?:0[1-9]|1[0-2]|[1-9])(?:\.[0-9]{1,4})?)\s*$",
     re.IGNORECASE,
 )
 _SEMVER = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
@@ -75,11 +114,26 @@ _CAPABILITY_FLAGS = (
 class LifecycleFailure(RuntimeError):
     """Stable classified failure that never carries a raw external diagnostic."""
 
-    def __init__(self, exit_code: int, stage: str, reason: str) -> None:
+    def __init__(
+        self,
+        exit_code: int,
+        stage: str,
+        reason: str,
+        error_code: Optional[str] = None,
+        detail: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
         super().__init__(reason)
         self.exit_code = int(exit_code)
         self.stage = stage
         self.reason = reason
+        # Machine-readable classification for callers that gate on the verdict,
+        # plus the sentence a human or agent is meant to act on.
+        self.error_code = error_code
+        self.detail = detail
+        # Evidence observed before the refusal, so a rejected host is still
+        # reported with the version that was found instead of only a code.
+        self.context = context
 
 
 @dataclass(frozen=True)
@@ -104,10 +158,29 @@ def _version_tuple(value: object) -> tuple[int, int, int]:
 
 
 def _host_version_tuple(value: object) -> tuple[int, int, int]:
-    match = re.fullmatch(r"([0-9]{4})\.(0[1-9]|1[0-2]|[1-9])(?:\.(0|[1-9][0-9]*))?", str(value))
+    # The day segment accepts zero padding to match `_VERSION` and
+    # `compat.parse_version`: snapshots built on the 1st-9th of a month report
+    # it padded (`2026.09.01`), and rejecting that here would let a host the
+    # probe just accepted fail on its own receipt.
+    match = re.fullmatch(r"([0-9]{4})\.(0[1-9]|1[0-2]|[1-9])(?:\.([0-9]{1,4}))?", str(value))
     if match is None:
         return ()  # type: ignore[return-value]
     return (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+
+
+def _install_openscad_step() -> dict[str, Any]:
+    ranges = ", ".join(supported_range_labels(load_matrix())) or "a supported version"
+    return {
+        "id": "install-openscad",
+        "description": "Install or pin an OpenSCAD in the supported range: %s" % ranges,
+        "command": [
+            sys.executable,
+            "-m",
+            "webbrowser",
+            "https://openscad.org/downloads.html",
+        ],
+        "why": "The standalone adapter requires a local OpenSCAD CLI executable",
+    }
 
 
 def _remaining(deadline: float) -> float:
@@ -287,8 +360,24 @@ def _capture_runtime(executable: Path, deadline: float) -> Dict[str, Any]:
     if match is None:
         raise LifecycleFailure(EXIT_VERIFY, "runtime", "product_identity_invalid")
     version = match.group(1)
-    if _host_version_tuple(version) < MINIMUM_HOST_TUPLE:
-        raise LifecycleFailure(EXIT_PREFLIGHT, "host_version", "host_version_unsupported")
+    verdict = classify_host(version)
+    if verdict["status"] != SUPPORTED:
+        # Out of matrix is never a warning: the adapter refuses to run a host it
+        # has not verified, and the reason names the covered ranges.
+        raise LifecycleFailure(
+            EXIT_PREFLIGHT,
+            "host_version",
+            "host_version_unsupported",
+            error_code=_host_error_code(verdict["status"]),
+            detail=unsupported_reason(verdict),
+            context={
+                "runtime": {
+                    "product": "OpenSCAD",
+                    "version": version,
+                    "host_matrix": verdict,
+                }
+            },
+        )
     help_result = _run_probe(
         [before["path"], "--help"],
         timeout=_remaining(deadline),
@@ -617,6 +706,7 @@ def _base_result(request: DoctorRequest, core_version: str) -> Dict[str, Any]:
         "verify": {"directly_usable": False, "failure_stage": None, "failure_reason": None},
         "command": request.operation,
         "requires_restart": False,
+        "error_code": None,
     }
 
 
@@ -629,6 +719,27 @@ def _failure_result(request: DoctorRequest, failure: LifecycleFailure) -> Dict[s
     result.update({"status": "failed", "exit_code": failure.exit_code})
     result["verify"].update({"failure_stage": failure.stage, "failure_reason": failure.reason})
     result["steps"] = [_step(failure.stage, "failed", "The lifecycle operation failed closed.")]
+    if failure.context:
+        # A refusal must still say which host was found and why: an error code
+        # alone leaves the caller to guess what to install.
+        result.update(failure.context)
+    if failure.error_code:
+        result["error_code"] = failure.error_code
+        result["steps"].append(_step("host_matrix", "failed", failure.detail or failure.reason))
+        result["next_steps"] = [
+            _next_step(
+                "pin-supported-openscad",
+                "Install or pin an OpenSCAD inside the verified compatibility matrix.",
+                failure.detail or failure.reason,
+                [
+                    "dcc-mcp-openscad",
+                    "doctor",
+                    "--json",
+                    "--executable",
+                    "<path-to-a-supported-openscad>",
+                ],
+            )
+        ]
     return result
 
 
@@ -745,11 +856,16 @@ def _run_lifecycle(request: DoctorRequest) -> Dict[str, Any]:
     _remaining(deadline)
     if core_before != core_after_probe:
         raise LifecycleFailure(EXIT_VERIFY, "identity", "core_identity_changed")
+    # The host verdict is machine readable and always present: `doctor --json`
+    # and `verify --json` must state the version that was actually found and
+    # whether it is inside the matrix, never a bare "ok".
+    host_matrix = classify_host(runtime["version"])
     result["runtime"] = {
         "product": runtime["product"],
         "version": runtime["version"],
         "sha256": runtime["sha256"],
         "capabilities": runtime["capabilities"],
+        "host_matrix": host_matrix,
     }
 
     if request.operation == "doctor":
@@ -758,6 +874,12 @@ def _run_lifecycle(request: DoctorRequest) -> Dict[str, Any]:
         result["steps"] = [
             _step("preflight", "ok", "Core and the exact OpenSCAD runtime are supported."),
             _step("runtime", "ok", "OpenSCAD version and capabilities are verified."),
+            _step(
+                "verify-host-matrix",
+                "ok",
+                "OpenSCAD %s is inside the verified compatibility matrix (%s)"
+                % (runtime["version"], ", ".join(host_matrix["supported_ranges"])),
+            ),
         ]
         return result
 

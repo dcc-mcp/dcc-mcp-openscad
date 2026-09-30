@@ -32,7 +32,7 @@ def _fake_openscad(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             return {
                 "success": True,
                 "returncode": 0,
-                "stdout": "OpenSCAD version 2024.01.15\n",
+                "stdout": "OpenSCAD version 2026.09.29\n",
                 "stderr": "",
                 "truncated": False,
             }
@@ -61,12 +61,12 @@ def _run_json(arguments: list[str], capsys) -> tuple[int, dict]:
     return exit_code, payload
 
 
-def test_uses_only_the_official_core_02014_install_contract() -> None:
+def test_uses_only_the_official_core_install_contract() -> None:
     from dcc_mcp_core.deployment import load_install_sop_schema
 
     import dcc_mcp_openscad.doctor as lifecycle
 
-    assert lifecycle.MINIMUM_CORE_VERSION == "0.20.14"
+    assert lifecycle.MINIMUM_CORE_VERSION == "0.20.36"
     assert lifecycle.load_install_sop_schema() == load_install_sop_schema()
     assert lifecycle.SCHEMA_VERSION == 1
     assert lifecycle.LIFECYCLE_COMMANDS == frozenset(
@@ -74,7 +74,7 @@ def test_uses_only_the_official_core_02014_install_contract() -> None:
     )
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = pyproject.read_text(encoding="utf-8")
-    assert '"dcc-mcp-core>=0.20.14,<1.0.0"' in project
+    assert '"dcc-mcp-core>=0.20.36,<1.0.0"' in project
     assert "\"importlib-metadata>=4.13,<7; python_version<'3.8'\"" in project
 
 
@@ -133,7 +133,7 @@ def test_install_uses_one_caller_entry_deadline_across_both_identity_captures(
         observed.append(timeout)
         time.sleep(0.03)
         output = (
-            "OpenSCAD version 2024.01\n"
+            "OpenSCAD version 2026.09.29\n"
             if "--version" in command
             else "--hardwarnings --render -p -P\n"
         )
@@ -195,7 +195,11 @@ def test_install_verify_uninstall_are_receipted_owned_and_idempotent(
     assert local_receipt["dcc_type"] == "openscad"
     assert local_receipt["openscad"]["sha256"]
     assert local_receipt["python"]["sha256"]
-    assert local_receipt["core"]["version"] >= "0.20.14"
+    # Compared as a version tuple, not as a string, so a future 0.100.0 does
+    # not satisfy the 0.20.36 floor by lexicographic accident.
+    from dcc_mcp_openscad.doctor import MINIMUM_CORE_VERSION, _version_tuple
+
+    assert _version_tuple(local_receipt["core"]["version"]) >= _version_tuple(MINIMUM_CORE_VERSION)
 
     exit_code, verified = _run_json(["verify", *common], capsys)
     assert exit_code == 0
@@ -1703,7 +1707,7 @@ def test_status_and_capabilities_share_one_caller_deadline(tmp_path: Path) -> No
             del cwd
             self.timeouts.append(timeout_secs)
             time.sleep(0.02)
-            output = "OpenSCAD version 2024.01\n" if "--version" in args else "--render -p -P\n"
+            output = "OpenSCAD version 2026.09.29\n" if "--version" in args else "--render -p -P\n"
             return {
                 "returncode": 0,
                 "stdout": output,

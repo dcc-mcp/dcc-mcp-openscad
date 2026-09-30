@@ -6,9 +6,11 @@ is installed into the OpenSCAD application. The canonical raw guide is
 
 ## Requirements
 
-- OpenSCAD 2021.01 or newer from the official project or an operating-system
-  package repository.
-- External Python 3.7 or newer with `dcc-mcp-core>=0.20.14,<1.0.0`.
+- OpenSCAD inside the verified compatibility matrix (see "Supported versions";
+  the matrix ships with the wheel as `compat_matrix.json` and is read at
+  runtime). Get it from the official project or an operating-system package
+  repository.
+- External Python 3.7 or newer with `dcc-mcp-core>=0.20.36,<1.0.0`.
 - Read/write access to each path in `DCC_MCP_OPENSCAD_ALLOWED_ROOTS`.
 
 The adapter does not download, scrape, update, or execute a remote OpenSCAD
@@ -16,6 +18,36 @@ payload. There is no adapter-managed binary cache. OpenSCAD remains owned by
 the operating-system package manager or official installation.
 
 ## Supported versions
+
+### Runtime boundary
+
+OpenSCAD is **not** a Python host: it has no embedded interpreter for the
+adapter to run inside. The adapter is a Python process that supervises an
+`openscad` CLI child process and talks to it only through command-line flags,
+stdin/stdout/stderr, and files on disk.
+
+```text
+host side (this adapter)              OpenSCAD side (child process)
+----------------------------------    ----------------------------------
+external Python 3.7+                 `openscad` CLI executable
+dcc_mcp_openscad.bridge              --version / --help probes
+dcc_mcp_openscad._process            one supervised process tree per call,   
+                                     bounded by a single absolute deadline
+dcc_mcp_openscad._probe_supervisor   owning the child's stdout/stderr files
+```
+
+Consequences worth knowing before debugging:
+
+- The Python version that matters is the **host-side** one that owns the wheel.
+  There is no second interpreter to keep in sync, so there is no
+  host/embedded version mismatch to diagnose.
+- Every CLI call is a fresh process with a bounded deadline; there is no
+  persistent session, no in-process state, and no shared memory.
+- Arguments cross the boundary as an argument vector, never through a shell,
+  so a model path or `-D` parameter is never interpreted as shell syntax.
+- Results cross back as files plus bounded captured output. A mutating tool
+  re-reads the artifact from disk to prove the write landed (see
+  `docs/write-contract.md`).
 
 | Platform | Automatic discovery | Explicit example |
 | --- | --- | --- |
@@ -25,7 +57,25 @@ the operating-system package manager or official installation.
 
 On Windows, use `openscad.com` for machine-readable console behavior. If an
 `openscad.exe` override has a sibling `openscad.com`, the adapter selects the
-`.com` launcher automatically. The minimum supported version is 2021.01.
+`.com` launcher automatically.
+
+### Version matrix
+
+OpenSCAD versions are calendar based: `YYYY.MM` for releases and `YYYY.MM.DD`
+for the dated snapshots the project publishes between releases. The supported
+ranges are declared in `compat_matrix.json` and enforced before any tool runs.
+
+| Range | Example | Status |
+| --- | --- | --- |
+| `2021.01.x` | `2021.01` | Supported, verified by a real end-to-end CI run |
+| `2026.09.x` | `2026.09.29` | Supported, verified by a real end-to-end CI run |
+
+Anything else is refused rather than silently accepted: a host below the matrix
+is reported as `openscad_host_version_unsupported`, one above it as
+`openscad_host_version_unverified`, and one in between (for example a `2024.x`
+build) as `openscad_host_version_unlisted`. `dcc-mcp-openscad doctor --json`
+always reports the version it actually found under `runtime.host_matrix` with
+its `status`, the covered `supported_ranges`, and a suggested action.
 
 ## Agent quick path
 
@@ -116,7 +166,7 @@ Stable exits are:
 | Code | Meaning |
 | --- | --- |
 | `0` | Core, executable, OpenSCAD version, and capability probe are usable |
-| `10` | Discovery, configuration, Core floor, or 2021.01 host floor failed |
+| `10` | Discovery, configuration, Core floor, or host version matrix failed |
 | `20` | External artifact acquisition failed (not used by this non-provisioning adapter) |
 | `30` | Receipt installation, upgrade, lock, or rollback failed |
 | `40` | The executable was found but runtime/capability verification failed |
@@ -131,9 +181,8 @@ CLI:
 OPENSCAD_TEST_EXECUTABLE=<absolute-openscad-cli> python -m pytest tests/test_bridge.py::test_real_openscad_validate_export_and_render -m openscad -q
 ```
 
-The default CI matrix does not download an unpinned binary and therefore does
-not claim this live CLI E2E. It does enforce doctor JSON and exit contracts on
-all supported runner platforms.
+CI runs this exact test on a real OpenSCAD for every supported range, with each
+binary pinned by version and SHA-256, and fails the job if the case is skipped.
 
 ## Upgrade
 
@@ -176,7 +225,10 @@ does not remove the application, an operator-owned file, or a binary cache.
   exists and uses the correct platform path separator.
 - `core_version`, exit `10`: upgrade Core in the external Python that owns the
   adapter wheel.
-- `host_version`, exit `10`: select OpenSCAD 2021.01 or newer.
+- `host_version`, exit `10`: install an OpenSCAD inside the matrix above and
+  re-run `doctor --json`. The `error_code` field names the verdict
+  (`openscad_host_version_unsupported`, `..._unverified`, `..._unlisted`, or
+  `..._unparsable`) and `steps` carry the covered ranges.
 - `receipt` or `ownership`, exit `30`/`40`: keep the receipt on a regular,
   non-reparse path and use `upgrade --yes` to adopt an intentionally changed
   Core, Python, or OpenSCAD executable.

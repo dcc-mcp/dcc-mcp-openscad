@@ -21,7 +21,8 @@ _Illustrative workflow based on the live OpenSCAD → FreeCAD → Blender/Godot 
   and OpenSCAD diagnostic formats.
 - Render bounded PNG previews or full geometry renders with typed camera,
   projection, color-scheme, size, and parameter inputs.
-- Stage outputs atomically and return file size plus SHA-256 provenance.
+- Stage outputs atomically, read the artifact back to prove the write landed,
+  and return file size plus SHA-256 provenance.
 
 The adapter does not accept arbitrary OpenSCAD command-line arguments or raw
 `-D` expressions. JSON scalar/array parameters are encoded by the adapter.
@@ -29,12 +30,47 @@ The adapter does not accept arbitrary OpenSCAD command-line arguments or raw
 ## Requirements
 
 - Python 3.7+
-- `dcc-mcp-core` 0.20.14+
-- OpenSCAD 2021.01 or newer
+- `dcc-mcp-core` 0.20.36+
+- OpenSCAD inside the verified compatibility matrix
+
+Supported ranges are declared in `compat_matrix.json` and enforced before any
+tool runs: OpenSCAD `2021.01.x` and `2026.09.x`. A host outside the matrix is
+refused with an explicit error code rather than run unverified, and
+`dcc-mcp-openscad doctor --json` always reports the version it found together
+with that verdict.
 
 On Windows, point to `openscad.com` when possible; if `openscad.exe` is
 configured and a sibling `openscad.com` exists, the adapter selects the console
 launcher automatically.
+
+## Runtime boundary
+
+OpenSCAD is not a Python host and has no embedded interpreter for the adapter
+to run inside. The adapter is a Python process that supervises an `openscad`
+CLI child process:
+
+```text
+host side (this adapter)               OpenSCAD side (child process)
+-----------------------------------    ---------------------------------
+external Python 3.7+                   `openscad` CLI executable
+dcc_mcp_openscad.bridge                --version / --help probes
+dcc_mcp_openscad._process              one supervised process tree per call,
+                                       bounded by a single absolute deadline
+dcc_mcp_openscad._probe_supervisor     owning the child's stdout/stderr files
+```
+
+What follows from that boundary:
+
+- The Python version that matters is the host-side one that owns the wheel.
+  There is no second interpreter, so there is no host/embedded version mismatch
+  to diagnose.
+- Every CLI call is a fresh process with a bounded deadline: no persistent
+  session, no in-process state, no shared memory.
+- Arguments cross the boundary as an argument vector, never through a shell, so
+  a model path or parameter is never interpreted as shell syntax.
+- Results come back as files plus bounded captured output, and a mutating tool
+  re-reads the artifact to prove the write landed (see
+  [`docs/write-contract.md`](docs/write-contract.md)).
 
 ## Install
 
@@ -99,10 +135,21 @@ or `vent_count` to verify safe parameter encoding and reproducible artifacts.
 - Source and output paths must remain under configured allowed roots.
 - Existing outputs are never replaced unless `overwrite=true` is explicit.
 - Exports use sibling temporary files and become visible only after success.
+- A mutating tool returns only after re-reading the artifact and proving the
+  write landed; a mismatch is an explicit error naming the expected and actual
+  values instead of a reported success.
 - Parameter names, values, nesting, count, image dimensions, formats, and
   deadlines are bounded.
 - Cancellation and timeouts terminate the owned OpenSCAD child process.
 - Captured process output is limited to 64 KiB per stream.
+
+## Verification
+
+CI installs a real OpenSCAD for every supported range -- each binary pinned by
+version and SHA-256 -- and runs the end-to-end case that validates, exports
+STL, and renders PNG. The job fails if that case is skipped, so a missing host
+cannot look like a pass. See [`install.md`](install.md) for the ranges and the
+error codes.
 
 OpenSCAD CLI reference:
 <https://en.wikibooks.org/wiki/OpenSCAD_User_Manual/Using_OpenSCAD_in_a_command_line_environment>

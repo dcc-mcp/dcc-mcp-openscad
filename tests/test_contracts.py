@@ -47,3 +47,19 @@ def test_server_declares_standalone_lifetime():
     server = OpenscadMcpServer(port=0)
     options = next(value for value in vars(server).values() if hasattr(value, "instance_type"))
     assert options.instance_type == "standalone"
+
+
+def test_skill_compatibility_matches_the_matrix_and_the_core_floor():
+    """A stale compatibility line is the first thing an agent mis-reads."""
+    from dcc_mcp_openscad.compat import supported_range_labels
+    from dcc_mcp_openscad.doctor import MINIMUM_CORE_VERSION
+
+    frontmatter = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    line = next(item for item in frontmatter.splitlines() if item.startswith("compatibility:"))
+
+    assert "dcc-mcp-core %s+" % MINIMUM_CORE_VERSION in line
+    for label in supported_range_labels():
+        assert label in line, label
+    # OpenSCAD is a CLI child process, not an embedded Python host: the line
+    # must not promise a Python version inside OpenSCAD.
+    assert line.count("Python") == 1
