@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.2.1...v0.3.0) (2026-09-30)
+
+
+### Features
+
+* align OpenSCAD adapter with the 1.0 standard ([3ed0c62](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/3ed0c620e6aa2f3ae484b4cb3613f3fe8290ceff))
+
 ## [0.2.1](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.2.0...v0.2.1) (2026-08-25)
 
 
