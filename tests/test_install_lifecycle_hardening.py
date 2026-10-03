@@ -183,12 +183,18 @@ def test_install_verify_uninstall_are_receipted_owned_and_idempotent(
     ]
 
     exit_code, plan = _run_json(["install", "--dry-run", *common], capsys)
-    assert exit_code == 0
+    assert exit_code == 0, (
+        plan["verify"]["failure_stage"],
+        plan["verify"]["failure_reason"],
+    )
     assert plan["status"] == "planned"
     assert not receipt.exists()
 
     exit_code, installed = _run_json(["install", "--yes", *common], capsys)
-    assert exit_code == 0
+    assert exit_code == 0, (
+        installed["verify"]["failure_stage"],
+        installed["verify"]["failure_reason"],
+    )
     assert installed["status"] == "ok"
     local_receipt = json.loads(receipt.read_text(encoding="utf-8"))
     assert local_receipt["receipt_version"] == 1
@@ -202,15 +208,24 @@ def test_install_verify_uninstall_are_receipted_owned_and_idempotent(
     assert _version_tuple(local_receipt["core"]["version"]) >= _version_tuple(MINIMUM_CORE_VERSION)
 
     exit_code, verified = _run_json(["verify", *common], capsys)
-    assert exit_code == 0
+    assert exit_code == 0, (
+        verified["verify"]["failure_stage"],
+        verified["verify"]["failure_reason"],
+    )
     assert verified["verify"]["directly_usable"] is True
 
     exit_code, removed = _run_json(["uninstall", "--yes", *common], capsys)
-    assert exit_code == 0
+    assert exit_code == 0, (
+        removed["verify"]["failure_stage"],
+        removed["verify"]["failure_reason"],
+    )
     assert removed["status"] == "ok"
     assert not receipt.exists()
     exit_code, repeated = _run_json(["uninstall", "--yes", *common], capsys)
-    assert exit_code == 0
+    assert exit_code == 0, (
+        repeated["verify"]["failure_stage"],
+        repeated["verify"]["failure_reason"],
+    )
     assert repeated["steps"][0]["status"] == "skipped"
 
 

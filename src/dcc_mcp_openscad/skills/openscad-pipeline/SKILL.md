@@ -3,7 +3,7 @@ name: openscad-pipeline
 description: >-
   Inspect, validate, export, and render OpenSCAD models through the bounded
   standalone CLI. Use for deterministic SCAD build pipelines; do not use it
-  for arbitrary command-line flags or source-code generation.
+  for arbitrary command-line flags. Bounded self-contained source creation is supported.
 license: MIT
 compatibility: "Python 3.7+; OpenSCAD 2021.01.x or 2026.09.x; dcc-mcp-core 0.20.36+"
 allowed-tools: "python"
@@ -36,7 +36,10 @@ Both are asynchronous, bounded by `timeout_secs`, and refuse replacement unless
 `overwrite=true` is explicit.
 
 Both are mutating tools, so both read the artifact back before returning: the
-result carries a `verified` list naming the checks that ran, and a write that
+MCP result carries `context.verification_checks` naming the checks that ran,
+with a boolean `postcondition.verified`, and a write that
 did not land raises an error naming the expected and actual values rather than
 reporting success. OpenSCAD is a CLI child process, not an embedded Python
 host, so a zero exit code on its own proves nothing about the artifact.
+
+Use `write_model_source` for a new self-contained `.scad` file before inspection. It refuses replacement, external references, symlinks and traversal; the parent must exist and its filesystem must support hard links. The request is limited to 262144 UTF-8 bytes.

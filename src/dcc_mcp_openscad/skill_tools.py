@@ -13,6 +13,11 @@ def bridge_main(method: str, message: str) -> Callable[..., dict[str, Any]]:
     @skill_entry
     def main(**kwargs: Any) -> dict[str, Any]:
         result = getattr(get_bridge(), method)(**kwargs)
+        checks = result.pop("verified", None)
+        if isinstance(checks, list):
+            return skill_success(
+                message, verified=bool(checks), verification_checks=checks, **result
+            )
         return skill_success(message, **result)
 
     return main

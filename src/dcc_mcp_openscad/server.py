@@ -38,11 +38,19 @@ class _SafeArgumentParser(argparse.ArgumentParser):
 
 
 class OpenscadMcpServer(DccServerBase):
-    def __init__(self, port: Optional[int] = None):
+    def __init__(
+        self,
+        port: Optional[int] = None,
+        *,
+        gateway_port: Optional[int] = None,
+        enable_gateway_failover: bool = True,
+    ):
         options = DccServerOptions.from_env(
             "openscad",
             Path(__file__).parent / "skills",
             port=port,
+            gateway_port=gateway_port,
+            enable_gateway_failover=enable_gateway_failover,
             server_name="dcc-mcp-openscad",
             server_version=__version__,
             adapter_version=__version__,
