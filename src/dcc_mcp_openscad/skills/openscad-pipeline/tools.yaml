@@ -132,7 +132,7 @@ tools:
       on-failure: [validate_model, get_capabilities]
 
   - name: write_model_source
-    description: Create a new bounded self-contained SCAD source file inside configured workspace roots, then verify exact bytes. Reject existing files, symlinks, traversal, and external references.
+    description: Create a new bounded self-contained SCAD source file inside configured workspace roots on a hard-link-capable filesystem, then verify exact bytes. Reject existing files, symlinks, traversal, and external references.
     source_file: scripts/write_model_source.py
     input_schema:
       type: object

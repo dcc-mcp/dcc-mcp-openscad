@@ -42,4 +42,4 @@ did not land raises an error naming the expected and actual values rather than
 reporting success. OpenSCAD is a CLI child process, not an embedded Python
 host, so a zero exit code on its own proves nothing about the artifact.
 
-Use `write_model_source` for a new self-contained `.scad` file before inspection. It refuses replacement, external references, symlinks and traversal; the parent must exist. The request is limited to 262144 UTF-8 bytes.
+Use `write_model_source` for a new self-contained `.scad` file before inspection. It refuses replacement, external references, symlinks and traversal; the parent must exist and its filesystem must support hard links. The request is limited to 262144 UTF-8 bytes.
