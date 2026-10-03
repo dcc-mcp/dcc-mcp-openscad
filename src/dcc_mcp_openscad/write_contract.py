@@ -60,6 +60,7 @@ SCHEMA_VERSION = 1
 
 # Tools that write an artifact into the workspace. Every entry owes a read-back.
 MUTATING_TOOLS = (
+    "write_model_source",
     "export_model",
     "render_preview",
 )

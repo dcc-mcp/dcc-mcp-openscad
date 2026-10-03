@@ -1,0 +1,405 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "base_commit": "11ad4f38a0a823b9a72b5a9413d7651c9b68a5c9",
+  "source_head": "b8d147c2ff7cabd6d878456374e8d824261c8ccf",
+  "source_tree": "a5990dbe009da959cf0648b2cae2d1d806b55844",
+  "versions": {
+    "dcc-mcp-core": "0.20.41",
+    "dcc-mcp-server": "0.20.41",
+    "dcc-mcp-cli": "0.20.41",
+    "mcp": "2.2.0",
+    "httpx2": "2.13.1",
+    "jsonschema": "4.26.0"
+  },
+  "host": {
+    "application": "OpenSCAD",
+    "version": "2021.01",
+    "ready": true
+  },
+  "execution": "Actual OpenscadMcpServer, official Core/server/CLI 0.20.41, genuine SDK MCP calls over an owned loopback service. The configured instance and gateway ports are 0 and gateway failover is explicitly false.",
+  "raw_trace": {
+    "sha256": "8d6ea07075b846ad8f1d9ac668053e7ae5376a794fd8530f3c9a71794f52b065",
+    "bytes": 375030,
+    "events": 34,
+    "distribution": "Raw trace retained privately; this file contains selected actual calls with declared privacy edits."
+  },
+  "privacy_edits": [
+    "Absolute artifact paths replaced with relative workspace roles; the real API requires resolved absolute output paths.",
+    "Discovery and job-polling messages, detailed transport errors, internal metadata and tracebacks omitted.",
+    "Oversized synthetic negative input represented by UTF-8 length and SHA-256 instead of its repeated contents.",
+    "No actual source-code stack traces, machine identifiers, internal addresses, credentials or binaries included."
+  ],
+  "synthetic_source": "// Synthetic UTF-8 qualification: café\nwidth=3;\ncube([width,5,7]);\n",
+  "independent_file_readback": {
+    "baseline_readback": {
+      "vertices": 8,
+      "faces": 6,
+      "bounds_min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_max": [
+        3.0,
+        5.0,
+        7.0
+      ],
+      "sha256": "3d57aa19b6104e5a9c06c2bc50a2eb09dd8a5aad1fea96bfd8081f8c501f06b5",
+      "bytes": 126
+    },
+    "variant_readback": {
+      "vertices": 8,
+      "faces": 6,
+      "bounds_min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_max": [
+        4.0,
+        5.0,
+        7.0
+      ],
+      "sha256": "80cf0488dde8b14f936890d5eb995651eb0fde4af0aaa712d011a4f712da40e3",
+      "bytes": 126
+    },
+    "stl_readback": {
+      "bytes": 684,
+      "facets": 12,
+      "sha256": "c9c25b08e90a896deb3c808369d78d65767e3b34f9b18c52deb4122588dc634d"
+    },
+    "source_unchanged_after_negatives": true,
+    "no_negative_artifacts_created": true
+  },
+  "negative_cases": [
+    "existing",
+    "outside",
+    "traversal",
+    "symlink",
+    "external_reference",
+    "nul_source",
+    "utf8_budget"
+  ],
+  "nul_case_scope": "The MCP request was rejected before the authoring operation; the authoring function NUL guard is covered separately by unit tests.",
+  "selected_actual_calls": [
+    {
+      "tool": "write_model_source",
+      "arguments": {
+        "output_path": "workspace/model.scad",
+        "source": "// Synthetic UTF-8 qualification: café\nwidth=3;\ncube([width,5,7]);\n"
+      },
+      "response": {
+        "success": true,
+        "message": "New self-contained OpenSCAD source written and verified.",
+        "context": {
+          "verification_checks": [
+            "new_file_only",
+            "workspace_root",
+            "self_contained",
+            "exact_utf8_readback"
+          ],
+          "path": "workspace/model.scad",
+          "bytes": 68,
+          "sha256": "df506f850342e4909d936db291374a39f47751a3b80b263d4b47d0be1227f54e"
+        },
+        "postcondition": {
+          "verified": true
+        }
+      },
+      "mcp_is_error": false,
+      "expected_failure": false
+    },
+    {
+      "tool": "inspect_source",
+      "arguments": {
+        "path": "workspace/model.scad"
+      },
+      "response": {
+        "success": true,
+        "message": "OpenSCAD source inspected.",
+        "context": {
+          "path": "workspace/model.scad",
+          "bytes": 68,
+          "lines": 3,
+          "modules": [],
+          "functions": [],
+          "assigned_variables": [
+            "width"
+          ],
+          "dependencies": []
+        }
+      },
+      "mcp_is_error": false,
+      "expected_failure": false
+    },
+    {
+      "tool": "validate_model",
+      "arguments": {
+        "path": "workspace/model.scad",
+        "strict": true
+      },
+      "response": {
+        "success": true,
+        "message": "OpenSCAD model validation finished.",
+        "context": {
+          "returncode": 0,
+          "duration_secs": 0.089,
+          "stdout": "",
+          "stderr": "",
+          "stdout_truncated": false,
+          "stderr_truncated": false,
+          "diagnostics": [],
+          "valid": true,
+          "source_path": "workspace/model.scad",
+          "compiled_bytes": 41,
+          "strict": true
+        }
+      },
+      "mcp_is_error": false,
+      "expected_failure": false
+    },
+    {
+      "tool": "export_model",
+      "arguments": {
+        "source_path": "workspace/model.scad",
+        "output_path": "workspace/model.off",
+        "strict": true
+      },
+      "response": {
+        "success": true,
+        "message": "OpenSCAD model exported.",
+        "context": {
+          "verification_checks": [
+            "artifact.exists",
+            "artifact.bytes",
+            "artifact.non_empty",
+            "artifact.sha256"
+          ],
+          "returncode": 0,
+          "duration_secs": 0.072,
+          "stdout": "",
+          "stderr": "Geometries in cache: 1\nGeometry cache size in bytes: 728\nCGAL Polyhedrons in cache: 0\nCGAL cache size in bytes: 0\nTotal rendering time: 0:00:00.000\n   Top level object is a 3D object:\n   Facets:          6\n",
+          "stdout_truncated": false,
+          "stderr_truncated": false,
+          "diagnostics": [],
+          "source_path": "workspace/model.scad",
+          "output_path": "workspace/model.off",
+          "bytes": 126,
+          "sha256": "3d57aa19b6104e5a9c06c2bc50a2eb09dd8a5aad1fea96bfd8081f8c501f06b5",
+          "overwritten": false
+        },
+        "postcondition": {
+          "verified": true
+        }
+      },
+      "mcp_is_error": false,
+      "expected_failure": false
+    },
+    {
+      "tool": "export_model",
+      "arguments": {
+        "source_path": "workspace/model.scad",
+        "output_path": "workspace/variant.off",
+        "parameters": {
+          "width": 4
+        },
+        "strict": true
+      },
+      "response": {
+        "success": true,
+        "message": "OpenSCAD model exported.",
+        "context": {
+          "verification_checks": [
+            "artifact.exists",
+            "artifact.bytes",
+            "artifact.non_empty",
+            "artifact.sha256"
+          ],
+          "returncode": 0,
+          "duration_secs": 0.082,
+          "stdout": "",
+          "stderr": "Geometries in cache: 1\nGeometry cache size in bytes: 728\nCGAL Polyhedrons in cache: 0\nCGAL cache size in bytes: 0\nTotal rendering time: 0:00:00.000\n   Top level object is a 3D object:\n   Facets:          6\n",
+          "stdout_truncated": false,
+          "stderr_truncated": false,
+          "diagnostics": [],
+          "source_path": "workspace/model.scad",
+          "output_path": "workspace/variant.off",
+          "bytes": 126,
+          "sha256": "80cf0488dde8b14f936890d5eb995651eb0fde4af0aaa712d011a4f712da40e3",
+          "overwritten": false
+        },
+        "postcondition": {
+          "verified": true
+        }
+      },
+      "mcp_is_error": false,
+      "expected_failure": false
+    },
+    {
+      "tool": "export_model",
+      "arguments": {
+        "source_path": "workspace/model.scad",
+        "output_path": "workspace/model.stl",
+        "strict": true
+      },
+      "response": {
+        "success": true,
+        "message": "OpenSCAD model exported.",
+        "context": {
+          "verification_checks": [
+            "artifact.exists",
+            "artifact.bytes",
+            "artifact.non_empty",
+            "artifact.sha256",
+            "stl.facets",
+            "stl.non_empty_geometry",
+            "stl.size_consistent"
+          ],
+          "returncode": 0,
+          "duration_secs": 0.083,
+          "stdout": "",
+          "stderr": "Geometries in cache: 1\nGeometry cache size in bytes: 728\nCGAL Polyhedrons in cache: 0\nCGAL cache size in bytes: 0\nTotal rendering time: 0:00:00.000\n   Top level object is a 3D object:\n   Facets:          6\n",
+          "stdout_truncated": false,
+          "stderr_truncated": false,
+          "diagnostics": [],
+          "source_path": "workspace/model.scad",
+          "output_path": "workspace/model.stl",
+          "bytes": 684,
+          "sha256": "c9c25b08e90a896deb3c808369d78d65767e3b34f9b18c52deb4122588dc634d",
+          "overwritten": false
+        },
+        "postcondition": {
+          "verified": true
+        }
+      },
+      "mcp_is_error": false,
+      "expected_failure": false
+    },
+    {
+      "tool": "write_model_source",
+      "arguments": {
+        "output_path": "workspace/model.scad",
+        "source": "cube(8);"
+      },
+      "response": {
+        "success": false,
+        "message": "Error: [Errno 17] File exists: 'workspace/model.scad'",
+        "error": "FileExistsError",
+        "prompt": "Check the error details and try again.",
+        "context": {
+          "error_type": "FileExistsError"
+        }
+      },
+      "mcp_is_error": true,
+      "expected_failure": true
+    },
+    {
+      "tool": "write_model_source",
+      "arguments": {
+        "output_path": "outside-workspace/outside.scad",
+        "source": "cube(1);"
+      },
+      "response": {
+        "success": false,
+        "message": "Error: output_path is outside configured workspace roots",
+        "error": "ValueError",
+        "prompt": "Check the error details and try again.",
+        "context": {
+          "error_type": "ValueError"
+        }
+      },
+      "mcp_is_error": true,
+      "expected_failure": true
+    },
+    {
+      "tool": "write_model_source",
+      "arguments": {
+        "output_path": "workspace/../escaped.scad",
+        "source": "cube(1);"
+      },
+      "response": {
+        "success": false,
+        "message": "Error: traversal and symlink paths are not accepted",
+        "error": "ValueError",
+        "prompt": "Check the error details and try again.",
+        "context": {
+          "error_type": "ValueError"
+        }
+      },
+      "mcp_is_error": true,
+      "expected_failure": true
+    },
+    {
+      "tool": "write_model_source",
+      "arguments": {
+        "output_path": "workspace/link/linked.scad",
+        "source": "cube(1);"
+      },
+      "response": {
+        "success": false,
+        "message": "Error: traversal and symlink paths are not accepted",
+        "error": "ValueError",
+        "prompt": "Check the error details and try again.",
+        "context": {
+          "error_type": "ValueError"
+        }
+      },
+      "mcp_is_error": true,
+      "expected_failure": true
+    },
+    {
+      "tool": "write_model_source",
+      "arguments": {
+        "output_path": "workspace/external.scad",
+        "source": "import(\"other.stl\");"
+      },
+      "response": {
+        "success": false,
+        "message": "Error: external source and data references are not accepted",
+        "error": "ValueError",
+        "prompt": "Check the error details and try again.",
+        "context": {
+          "error_type": "ValueError"
+        }
+      },
+      "mcp_is_error": true,
+      "expected_failure": true
+    },
+    {
+      "tool": "write_model_source",
+      "arguments": {
+        "output_path": "workspace/nul.scad",
+        "source": "cube(1);\u0000"
+      },
+      "response": {
+        "omitted": "Transport error text omitted; actual MCP is_error is preserved"
+      },
+      "mcp_is_error": true,
+      "expected_failure": true
+    },
+    {
+      "tool": "write_model_source",
+      "arguments": {
+        "output_path": "workspace/oversized.scad",
+        "source_omitted": {
+          "synthetic_repeated_character": "é",
+          "characters": 131073,
+          "utf8_bytes": 262146,
+          "sha256": "f255f6867867b3951d82413e5cebf5973f140cbce4a0ea963630b38bcf6325ba"
+        }
+      },
+      "response": {
+        "success": false,
+        "message": "Error: source exceeds 262144 UTF-8 bytes",
+        "error": "ValueError",
+        "prompt": "Check the error details and try again.",
+        "context": {
+          "error_type": "ValueError"
+        }
+      },
+      "mcp_is_error": true,
+      "expected_failure": true
+    }
+  ]
+}

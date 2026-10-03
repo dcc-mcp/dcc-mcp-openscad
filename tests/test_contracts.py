@@ -26,6 +26,7 @@ def test_all_tools_are_typed_bounded_and_affinity_explicit():
         "validate_model",
         "export_model",
         "render_preview",
+        "write_model_source",
     }
     for tool in tools:
         assert tool["input_schema"]["type"] == "object"

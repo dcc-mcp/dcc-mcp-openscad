@@ -1,0 +1,9 @@
+# Source authoring publication validation
+
+The [selected source qualification](source-authoring-native.json) records actual adapter-class MCP write, inspect, validate and native export calls on OpenSCAD 2021.01 and official Core/server/CLI 0.20.41. Independent readback found 8 vertices and 6 OFF faces with bounds 3×5×7, a parameter variant with bounds 4×5×7, and a 684-byte binary STL with 12 facets. Seven negative requests left the original source unchanged and created no negative artifact.
+
+The receipt describes the handed-off source snapshot. Its privacy transformations, raw trace byte count, event count and SHA-256 are declared in the JSON. Public artifact paths are relative roles; the real API requires absolute paths within configured roots. The private raw trace is not included. Direct CLI checks are separate from actual MCP requests.
+
+Publication review subsequently rejects Windows alternate streams, reserved devices and trailing dots/spaces, with version-stable device-name handling and regressions. Bounded pytest parameter IDs avoid serializing oversized inputs into process environment variables. Ruff lint/format, sdist/wheel builds and Twine checks pass on Windows Python 3.12 / Core 0.20.41. The complete local suite reports 145 passed, 9 skipped and 3 failures in unchanged process-lifecycle tests. The isolated lifecycle regression and five equivalent synthetic runs pass, but do not replace a green full suite. Exact-head remote CI must qualify the final changes separately from the historical native receipt.
+
+The source snapshot's full suite retained one existing PNG-preview failure on its headless host. Supported OpenSCAD native CI must execute and pass its PNG/STL assertions without skips on the final PR head before merge. No GUI acceptance or release is claimed.
