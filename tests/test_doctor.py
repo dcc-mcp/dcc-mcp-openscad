@@ -54,7 +54,10 @@ def test_doctor_cli_reports_missing_openscad_as_stable_json(tmp_path: Path, caps
     result = json.loads(captured.out)
     _validate(result)
     assert captured.err == ""
-    assert exit_code == 10
+    assert exit_code == 10, (
+        result["verify"]["failure_stage"],
+        result["verify"]["failure_reason"],
+    )
     assert result["schema_version"] == 1
     assert result["command"] == "doctor"
     assert result["dcc_type"] == "openscad"
@@ -93,7 +96,10 @@ def test_doctor_reports_exact_version_capabilities_and_identity(
     result = json.loads(captured.out)
     _validate(result)
     assert captured.err == ""
-    assert exit_code == 0
+    assert exit_code == 0, (
+        result["verify"]["failure_stage"],
+        result["verify"]["failure_reason"],
+    )
     assert result["verify"]["directly_usable"] is True
     assert result["runtime"]["product"] == "OpenSCAD"
     assert result["runtime"]["version"] == "2026.09.29"
@@ -124,7 +130,10 @@ def test_doctor_enforces_current_core_floor(
 
     result = json.loads(capsys.readouterr().out)
     _validate(result)
-    assert exit_code == 10
+    assert exit_code == 10, (
+        result["verify"]["failure_stage"],
+        result["verify"]["failure_reason"],
+    )
     assert result["verify"]["failure_stage"] == "core"
     assert result["verify"]["failure_reason"] == "core_version_unsupported"
 
@@ -139,7 +148,10 @@ def test_doctor_enforces_openscad_version_floor(
 
     result = json.loads(capsys.readouterr().out)
     _validate(result)
-    assert exit_code == 10
+    assert exit_code == 10, (
+        result["verify"]["failure_stage"],
+        result["verify"]["failure_reason"],
+    )
     assert result["verify"]["failure_stage"] == "host_version"
     assert result["verify"]["failure_reason"] == "host_version_unsupported"
 
@@ -159,7 +171,10 @@ def test_doctor_rejects_a_host_outside_the_matrix_and_still_reports_it(
 
     result = json.loads(capsys.readouterr().out)
     _validate(result)
-    assert exit_code == 10
+    assert exit_code == 10, (
+        result["verify"]["failure_stage"],
+        result["verify"]["failure_reason"],
+    )
     assert result["error_code"] == "openscad_host_version_unlisted"
     assert result["verify"]["failure_stage"] == "host_version"
 
@@ -180,7 +195,10 @@ def test_doctor_rejects_a_host_newer_than_the_matrix(
 
     result = json.loads(capsys.readouterr().out)
     _validate(result)
-    assert exit_code == 10
+    assert exit_code == 10, (
+        result["verify"]["failure_stage"],
+        result["verify"]["failure_reason"],
+    )
     assert result["error_code"] == "openscad_host_version_unverified"
 
 
@@ -204,7 +222,10 @@ def test_verify_requires_an_owned_receipt(
 
     result = json.loads(capsys.readouterr().out)
     _validate(result)
-    assert exit_code == 40
+    assert exit_code == 40, (
+        result["verify"]["failure_stage"],
+        result["verify"]["failure_reason"],
+    )
     assert result["verify"]["failure_stage"] == "receipt"
     assert result["verify"]["failure_reason"] == "receipt_missing"
 
