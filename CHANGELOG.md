@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.3.0...v0.4.0) (2026-10-04)
+
+
+### Features
+
+* author bounded native model source ([#17](https://github.com/dcc-mcp/dcc-mcp-openscad/issues/17)) ([2bf3bd3](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/2bf3bd35d99312220fe0040825e5270edce2e8e5))
+
+
+### Bug Fixes
+
+* drop the unused Install SOP artifact revision mirror ([#19](https://github.com/dcc-mcp/dcc-mcp-openscad/issues/19)) ([f30f4e2](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/f30f4e21173a6860635f424e5c449ce3de8f5594))
+
 ## [0.3.0](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.2.1...v0.3.0) (2026-09-30)
 
 
