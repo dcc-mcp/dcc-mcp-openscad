@@ -30,7 +30,6 @@ from dcc_mcp_core.deployment import (
     INSTALL_EXIT_PREFLIGHT,
     INSTALL_EXIT_REQUIRES_RESTART,
     INSTALL_EXIT_VERIFY,
-    INSTALL_SOP_SCHEMA_VERSION,
     load_install_sop_schema,
 )
 
@@ -49,12 +48,15 @@ from .compat import (
     unsupported_reason,
 )
 
-# `INSTALL_SOP_SCHEMA_VERSION` is the revision of the published schema *artifact*
-# (2 since dcc-mcp-core 0.20.36). The `schema_version` field the artifact pins
-# on a report document is a separate, stable counter and stays 1, so the two are
-# named separately here: conflating them makes every report fail validation the
-# moment the resolved core advances.
-ARTIFACT_SCHEMA_VERSION = INSTALL_SOP_SCHEMA_VERSION
+# The `schema_version` field a report document carries is the value the published
+# schema pins as `properties.schema_version.const`, and it stays at 1. It is
+# deliberately NOT the revision of the published schema *artifact* (the `-vN`
+# suffix of `adapter-install-sop-vN.schema.json`, 2 since dcc-mcp-core 0.20.36,
+# named `INSTALL_SOP_SCHEMA_REVISION` from 0.20.40): that is a separate counter
+# which moves independently, because an artifact revision only ever adds optional
+# members. Emitting the artifact revision as `schema_version` makes every report
+# fail validation the moment the resolved core advances. Nothing in this adapter
+# reads the artifact revision, so it is not mirrored here at all.
 SCHEMA_VERSION = 1
 MINIMUM_CORE_VERSION = "0.20.36"
 MINIMUM_HOST_VERSION = minimum_host_version(load_matrix()) or "2021.01"
