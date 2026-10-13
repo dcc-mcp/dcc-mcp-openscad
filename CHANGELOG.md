@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.1](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.4.0...v0.4.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **ci:** cut release PRs with a collaborator token ([#21](https://github.com/dcc-mcp/dcc-mcp-openscad/issues/21)) ([bdc7e1d](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/bdc7e1d0e8d598e813f7ae603fceddb9060c6308))
+
+
+### Documentation
+
+* **readme:** add the generated DCC-MCP host matrix pointer ([500ec8a](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/500ec8ac9328df04ce5f47940bbc3a0d4eef9bd9))
+* refresh the generated DCC-MCP host matrix pointer ([d64b2a0](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/d64b2a0d11d6a8547cabe447e8821ec54ba8dd45))
+
 ## [0.4.0](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.3.0...v0.4.0) (2026-10-04)
 
 
