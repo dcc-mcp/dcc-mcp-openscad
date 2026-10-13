@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
 from dcc_mcp_openscad.bridge import (
     OpenscadCli,
     OpenScadError,
+    OpenScadHostUnsupportedError,
     _parameter_args,
 )
 
@@ -212,6 +214,96 @@ def test_render_preview_validates_png_contract(tmp_path: Path):
 
     with pytest.raises(OpenScadError, match="between 64 and 8192"):
         cli.render_preview(str(source), str(tmp_path / "bad.png"), width=16)
+
+
+class HostVersionOpenScad(FakeOpenScad):
+    """A fake host whose reported version is chosen per instance."""
+
+    def __init__(self, root: Path, version: Optional[str]):
+        super().__init__(root)
+        self.version = version
+
+    def _run(self, args, timeout_secs, cwd=None):
+        if "--version" in args:
+            self.calls.append((list(args), timeout_secs, cwd))
+            return self._result(stdout="OpenSCAD version %s\n" % self.version)
+        return super()._run(args, timeout_secs, cwd)
+
+
+# Versions outside the declared `2021.01.x` / `2026.09.x` ranges, paired with
+# the machine-readable code `doctor.py` publishes for the same verdict.
+_OUT_OF_MATRIX_VERSIONS = [
+    ("2024.06", "unlisted", "openscad_host_version_unlisted"),
+    ("2023.05.11", "unlisted", "openscad_host_version_unlisted"),
+    ("not-a-version", "unknown", "openscad_host_version_unparsable"),
+    ("", "unknown", "openscad_host_version_unparsable"),
+    ("2030.01", "too_new", "openscad_host_version_unverified"),
+    ("2019.05", "too_old", "openscad_host_version_unsupported"),
+]
+
+
+@pytest.mark.parametrize("version,status,error_code", _OUT_OF_MATRIX_VERSIONS)
+def test_validate_model_rejects_host_outside_matrix(tmp_path, version, status, error_code):
+    source = tmp_path / "model.scad"
+    source.write_text("cube(2);", encoding="utf-8")
+    cli = HostVersionOpenScad(tmp_path, version)
+
+    with pytest.raises(OpenScadHostUnsupportedError) as caught:
+        cli.validate_model(str(source))
+
+    assert caught.value.error_code == error_code
+    assert caught.value.verdict["status"] == status
+    # The refusal happens before the compile, so no modelling command ran.
+    assert not [call for call in cli.calls if "-o" in call[0]]
+
+
+@pytest.mark.parametrize("version,status,error_code", _OUT_OF_MATRIX_VERSIONS)
+def test_export_rejects_host_outside_matrix(tmp_path, version, status, error_code):
+    source = tmp_path / "model.scad"
+    source.write_text("cube(2);", encoding="utf-8")
+    cli = HostVersionOpenScad(tmp_path, version)
+
+    with pytest.raises(OpenScadHostUnsupportedError) as caught:
+        cli.export_model(str(source), str(tmp_path / "model.stl"))
+
+    assert caught.value.error_code == error_code
+    assert caught.value.verdict["status"] == status
+    assert not (tmp_path / "model.stl").exists()
+
+
+@pytest.mark.parametrize("version,status,error_code", _OUT_OF_MATRIX_VERSIONS)
+def test_render_preview_rejects_host_outside_matrix(tmp_path, version, status, error_code):
+    """Preview is an export path too, so it inherits the same gate."""
+    source = tmp_path / "model.scad"
+    source.write_text("cube(2);", encoding="utf-8")
+    cli = HostVersionOpenScad(tmp_path, version)
+
+    with pytest.raises(OpenScadHostUnsupportedError) as caught:
+        cli.render_preview(str(source), str(tmp_path / "model.png"))
+
+    assert caught.value.error_code == error_code
+
+
+def test_modelling_runs_again_once_the_host_is_supported(tmp_path):
+    """The gate is a gate, not a permanent block: a covered host still runs."""
+    source = tmp_path / "model.scad"
+    source.write_text("cube(2);", encoding="utf-8")
+    cli = HostVersionOpenScad(tmp_path, "2021.01")
+
+    assert cli.validate_model(str(source))["valid"] is True
+
+
+def test_unprobed_host_is_not_treated_as_supported(tmp_path):
+    """A host that cannot report a version must fail closed, not pass."""
+    source = tmp_path / "model.scad"
+    source.write_text("cube(2);", encoding="utf-8")
+    cli = HostVersionOpenScad(tmp_path, "2021.01")
+    cli._host_identity = (None, None)
+
+    with pytest.raises(OpenScadHostUnsupportedError) as caught:
+        cli.validate_model(str(source))
+
+    assert caught.value.error_code == "openscad_host_version_unparsable"
 
 
 def _real_openscad() -> str:
