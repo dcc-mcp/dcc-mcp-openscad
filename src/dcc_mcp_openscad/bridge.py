@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ._process import ProcessCleanupError, run_bounded_command
-from .compat import classify_host
+from .compat import SUPPORTED, classify_host, unsupported_reason
 from .write_contract import WriteVerificationError, verify_artifact
 
 _PARAMETER_NAME = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
@@ -73,6 +73,29 @@ class OpenScadWriteVerificationError(OpenScadError):
     def __init__(self, error: WriteVerificationError):
         self.verification = dict(error.payload)
         super().__init__(str(error))
+
+
+class OpenScadHostUnsupportedError(OpenScadError):
+    """The host version is outside the verified compatibility matrix.
+
+    Subclasses :class:`OpenScadError` so existing callers that already handle
+    adapter failures keep working, and carries the structured verdict plus the
+    machine-readable code the lifecycle publishes for the same condition.
+    """
+
+    # Kept in sync with the codes `doctor.py` emits for the same verdicts, so
+    # one matrix yields one set of codes however the host is reached.
+    ERROR_CODES = {
+        "too_new": "openscad_host_version_unverified",
+        "unlisted": "openscad_host_version_unlisted",
+        "unknown": "openscad_host_version_unparsable",
+    }
+    ERROR_CODE_UNSUPPORTED = "openscad_host_version_unsupported"
+
+    def __init__(self, verdict: Mapping[str, Any]):
+        self.verdict = dict(verdict)
+        self.error_code = self.ERROR_CODES.get(verdict.get("status"), self.ERROR_CODE_UNSUPPORTED)
+        super().__init__(unsupported_reason(verdict))
 
 
 def _split_roots(value: str) -> list[Path]:
@@ -461,6 +484,7 @@ class OpenscadCli:
         strict: bool = True,
         timeout_secs: float = 120,
     ) -> dict[str, Any]:
+        self._require_supported_host()
         source_path = self._source_path(path)
         with tempfile.TemporaryDirectory(prefix="dcc-mcp-openscad-") as temp_dir:
             output = Path(temp_dir) / "validation.csg"
@@ -494,6 +518,7 @@ class OpenscadCli:
         tool: str = "export_model",
         expectations: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
+        self._require_supported_host()
         replaced_existing = output_path.exists()
         if replaced_existing and not overwrite:
             raise OpenScadError("Output already exists; set overwrite=true to replace it")
@@ -561,6 +586,25 @@ class OpenscadCli:
         version = str(status.get("version") or "") or None
         self._host_identity = (version, status.get("host_matrix"))
         return self._host_identity
+
+    def _require_supported_host(self) -> "tuple[Optional[str], dict[str, Any]]":
+        """Gate a modelling call on the host version matrix.
+
+        Status reporting is observation and stays permissive, but a modelling
+        call would otherwise run a host the adapter has never verified, so it
+        fails closed here. The verdict comes from :mod:`compat`, the same
+        single source the lifecycle uses, and the error codes are the ones the
+        lifecycle already publishes.
+        """
+        version, verdict = self.host_identity()
+        if verdict is None:
+            # The probe could not classify the host (no executable, or the
+            # version it printed was unusable). That is not a supported host,
+            # so classify the empty version and let the verdict name it.
+            verdict = classify_host(version or "")
+        if verdict["status"] == SUPPORTED:
+            return version, verdict
+        raise OpenScadHostUnsupportedError(verdict)
 
     def _read_back(
         self,
