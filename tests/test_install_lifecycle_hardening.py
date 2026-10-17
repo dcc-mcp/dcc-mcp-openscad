@@ -243,7 +243,11 @@ def test_install_cannot_replace_a_changed_owned_receipt_without_upgrade(
         "--timeout-secs",
         "5",
     ]
-    assert _run_json(["install", "--yes", *common], capsys)[0] == 0
+    exit_code, installed = _run_json(["install", "--yes", *common], capsys)
+    assert exit_code == 0, (
+        installed["verify"]["failure_stage"],
+        installed["verify"]["failure_reason"],
+    )
     previous = receipt.read_bytes()
     executable.write_bytes(b"official-openscad-fixture-v2")
 
