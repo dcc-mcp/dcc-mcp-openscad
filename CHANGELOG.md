@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.4.1...v0.5.0) (2026-10-17)
+
+
+### Features
+
+* gate modelling calls on the host version matrix ([#26](https://github.com/dcc-mcp/dcc-mcp-openscad/issues/26)) ([2140d65](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/2140d6545f113c9613a7aeba9124782bf309ea23))
+
+
+### Documentation
+
+* refresh the generated DCC-MCP host matrix pointer ([#24](https://github.com/dcc-mcp/dcc-mcp-openscad/issues/24)) ([cd53738](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/cd537389d01992fc9371d707d6f313f78526c684))
+
 ## [0.4.1](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.4.0...v0.4.1) (2026-10-13)
 
 
