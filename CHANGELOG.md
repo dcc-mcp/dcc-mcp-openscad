@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.5.0...v0.5.1) (2026-11-24)
+
+
+### Documentation
+
+* refresh the generated DCC-MCP host matrix pointer ([2db4c25](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/2db4c257993ba61637bbd2b53cb2e30e9d2275cd))
+* refresh the generated DCC-MCP host matrix pointer ([537297e](https://github.com/dcc-mcp/dcc-mcp-openscad/commit/537297e0c098d6df4591eda92285ff1460eba094))
+
 ## [0.5.0](https://github.com/dcc-mcp/dcc-mcp-openscad/compare/v0.4.1...v0.5.0) (2026-10-17)
 
 
